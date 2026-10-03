@@ -1,0 +1,18 @@
+{
+  "_comment": "Catalogo referencial. La app funciona con cualquier modelo FortiGate aunque no este aqui; este JSON solo autorrellena la GUI. Basado en datasheets publicos de Fortinet (FortiGate series E/F/G).",
+  "40F":  {"wan": 2, "lan_ports": 5,  "mgmt": false, "dmz": false, "ha": false},
+  "60F":  {"wan": 2, "lan_ports": 5,  "mgmt": false, "dmz": false, "ha": false},
+  "70F":  {"wan": 2, "lan_ports": 8,  "mgmt": false, "dmz": false, "ha": false},
+  "80F":  {"wan": 2, "lan_ports": 6,  "mgmt": false, "dmz": false, "ha": false},
+  "100F": {"wan": 2, "lan_ports": 20, "mgmt": true,  "dmz": true,  "ha": true},
+  "120F": {"wan": 2, "lan_ports": 16, "mgmt": true,  "dmz": false, "ha": true},
+  "200F": {"wan": 2, "lan_ports": 16, "mgmt": true,  "dmz": true,  "ha": true},
+  "400F": {"wan": 2, "lan_ports": 24, "mgmt": true,  "dmz": true,  "ha": true},
+  "600F": {"wan": 2, "lan_ports": 24, "mgmt": true,  "dmz": true,  "ha": true},
+  "900F": {"wan": 2, "lan_ports": 32, "mgmt": true,  "dmz": true,  "ha": true},
+  "100G": {"wan": 2, "lan_ports": 22, "mgmt": true,  "dmz": true,  "ha": true},
+  "200G": {"wan": 2, "lan_ports": 18, "mgmt": true,  "dmz": true,  "ha": true},
+  "400G": {"wan": 2, "lan_ports": 24, "mgmt": true,  "dmz": true,  "ha": true},
+  "600G": {"wan": 2, "lan_ports": 24, "mgmt": true,  "dmz": true,  "ha": true},
+  "900G": {"wan": 2, "lan_ports": 32, "mgmt": true,  "dmz": true,  "ha": true}
+}
