@@ -490,10 +490,14 @@ def map_interfaces(
     # Aplicar reasignaciones (automaticas o del usuario)
     reassignment_map: Dict[str, str] = {}  # src_name -> target_slot
     if reassignments is not None:
-        # Validar que el usuario no asigne dos interfaces al mismo slot
+        # Validar que el usuario no asigne dos interfaces al mismo slot.
+        # Target VACIO = "sin eleccion manual": se omite silenciosamente (el
+        # motor genera esos entries vacios por defecto; no son duplicados).
         used_targets: Set[str] = set()
         for ra in reassignments:
             target = ra.target_slot
+            if not target or not target.strip():
+                continue
             if target in used_targets:
                 result.warnings.append(
                     f"Reasignacion duplicada al slot '{target}': solo se aplicara la primera"

@@ -116,6 +116,21 @@ def rename_references(ast: AST, mapping: Dict[str, str]) -> Dict[str, int]:
     return counts
 
 
+_NONINTERFACE_VALUES = {"*", "any", "none"}
+
+
+def _is_macro_or_wildcard(value: str) -> bool:
+    """True para valores que nunca son nombres de interfaz fisica: macros
+    ("$(VDOM_LINKS)"), wildcards ("*") y placeholders de plantilla."""
+    return bool(
+    value in _NONINTERFACE_VALUES
+    or "(" in value
+    or "$" in value
+    or "*" in value
+    or "?" in value
+)
+
+
 def find_unrenamed_references(
     text: str, mapping: Dict[str, str]
 ) -> List[Tuple[int, str, str]]:
@@ -168,6 +183,8 @@ def find_orphaned_references(
             if not refs:
                 refs = [value.split()[0]] if value else []
             for ref in refs:
+                if ref in _NONINTERFACE_VALUES or _is_macro_or_wildcard(ref):
+                    continue
                 if ref not in defined_interfaces:
                     results.append((line_no, ref, line))
     return results

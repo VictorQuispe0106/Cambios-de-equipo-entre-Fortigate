@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional
 
+from .renamer import _NONINTERFACE_VALUES, _is_macro_or_wildcard
+
 
 @dataclass
 class ValidationResult:
@@ -235,8 +237,10 @@ def _check_interface_references(lines: List[str], result: ValidationResult):
             refs = re.findall(r'"([^"]+)"', value)
             if not refs:
                 refs = [value.split()[0]] if value else []
-            
+
             for ref in refs:
+                if ref in _NONINTERFACE_VALUES or _is_macro_or_wildcard(ref):
+                    continue
                 if ref not in defined_interfaces:
                     referenced_interfaces.add(ref)
     
@@ -362,7 +366,9 @@ def _check_member_interface_refs(lines: List[str], result: ValidationResult):
         if not refs:
             refs = [t for t in value.split() if t]
         for ref in refs:
-            if ref and ref not in defined:
+            if not ref or ref in _NONINTERFACE_VALUES or _is_macro_or_wildcard(ref):
+                continue
+            if ref not in defined:
                 result.warnings.append(
                     f"Línea {line_no}: 'set member' en '{context}' referencia la "
                     f"interfaz '{ref}' que no está definida en 'config system interface'"
