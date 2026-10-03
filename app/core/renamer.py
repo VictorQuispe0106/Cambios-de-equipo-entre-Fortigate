@@ -21,10 +21,53 @@ from .parser import Node, AST, find_config
 
 _NAME_CHARS = re.compile(r"[A-Za-z0-9_.\-]")
 
+_SUFFIX_RE = re.compile(r"^(.*?)((?:\.\d+)+)$")
+
+
+def _split_name_suffix(matched: str) -> Tuple[str, str]:
+    """Separa un nombre con sufijo de subinterfaz: 'port1.100' -> ('port1', '.100')."""
+    m = _SUFFIX_RE.match(matched)
+    if m:
+        return m.group(1), m.group(2)
+    return matched, ""
 
 def _build_pattern(old: str) -> re.Pattern:
     escaped = re.escape(old)
     return re.compile(rf"(?<![A-Za-z0-9_.\-]){escaped}(?![A-Za-z0-9_.\-])")
+
+
+def _build_combined_pattern(mapping: Dict[str, str]):
+    """
+    Construye UNA regex con alternacion de todas las claves del mapping
+    (ordenadas de mas larga a mas corta), con captura del nombre viejo.
+    El callable de reemplazo nunca re-escanea el texto de reemplazo:
+    un solo pase evita corrupcion en mapeos encadenados
+    (ej. wan3->port4 y port4->port5).
+    """
+    keys = sorted(mapping.keys(), key=len, reverse=True)
+    if not keys:
+        return None
+    alts = "|".join(f"(?P<k{i}>{re.escape(k)})" for i, k in enumerate(keys))
+    # Los refs a subinterfaces fisicas usan sufijo .N (ej. port1.100):
+    # se captura junto con la clave para renombrar old.subN -> new.subN
+    return re.compile(rf"(?<![A-Za-z0-9_.\-])(?:{alts})((?:\.\d+)+)?(?![A-Za-z0-9_.\-])")
+
+
+def _make_replacer(mapping: Dict[str, str], counts: Dict[str, int]):
+    """Callable de reemplazo para el pase unico: sustituye cada coincidencia
+    por su mapping correspondiente y acumula el conteo por nombre viejo."""
+    pattern = _build_combined_pattern(mapping)
+    keys = sorted(mapping.keys(), key=len, reverse=True)
+
+    def repl(match: re.Match) -> str:
+        matched = match.group(0)
+        suffix = match.group(len(keys) + 1) or ""
+        # base = la clave que matcheo (alternativas ordenadas mas larga primero)
+        base = matched[: len(matched) - len(suffix)] if suffix else matched
+        counts[base] += 1
+        return mapping[base] + suffix
+
+    return repl, pattern
 
 
 _INTERFACE_REF_KEYS = {
@@ -35,11 +78,15 @@ _INTERFACE_REF_KEYS = {
 
 def rename_references(ast: AST, mapping: Dict[str, str]) -> Dict[str, int]:
     """
-    Recorre el AST y reemplaza referencias a nombres viejos por los nuevos.
+    Recorre el AST y reemplaza referencias a nombres viejos por los nuevos
+    en UN SOLO pase (el texto de reemplazo nunca se re-escanea, evitando
+    corrupcion con mapeos encadenados).
     Devuelve un dict {nombre_viejo: #_sustituciones_realizadas}.
     """
     counts: Dict[str, int] = {old: 0 for old in mapping}
-    patterns = {old: _build_pattern(old) for old in mapping}
+    repl, pattern = _make_replacer(mapping, counts)
+    if pattern is None:
+        return counts
     cfg_interface = find_config(ast, "system interface")
 
     def walk(node: Node):
@@ -54,14 +101,8 @@ def rename_references(ast: AST, mapping: Dict[str, str]) -> Dict[str, int]:
                 ):
                     continue
                 old_t = child.text
-                new_t = old_t
-                for old, new in mapping.items():
-                    new_t = patterns[old].sub(new, new_t)
+                new_t = pattern.sub(repl, old_t)
                 if new_t != old_t:
-                    for old in mapping:
-                        before = len(patterns[old].findall(old_t))
-                        after = len(patterns[old].findall(new_t))
-                        counts[old] += max(0, before - after)
                     child.text = new_t
                 continue
 
@@ -82,14 +123,16 @@ def find_unrenamed_references(
     Busca referencias a nombres viejos que no fueron renombradas.
     Returns: Lista de (line_number, interface_name, line_text).
     """
-    patterns = {old: _build_pattern(old) for old in mapping}
+    patterns = {old: _build_pattern(old) for old in mapping if old not in mapping.values()}
     results = []
     for line_no, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         for old_name in mapping:
-            if patterns[old_name].search(line):
+            # Un nombre que tambien es valor del mapping es producto del
+            # renombrado en un solo pase, no una referencia no renombrada.
+            if old_name in patterns and patterns[old_name].search(line):
                 results.append((line_no, old_name, line))
     return results
 

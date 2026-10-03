@@ -366,24 +366,57 @@ def map_interfaces(
     consumed_lan_slots: List[str] = []  # slots portN usados en el paso 2
     used_slots: Set[str] = set()  # nombres de slot ya generados
 
+    # T3: conservar comentarios y lineas en blanco del bloque original.
+    # Los previos al primer edit se emiten al inicio del bloque; los
+    # desplazados entre edits se emiten al final en lugar de descartarse.
+    prelude: List[Node] = []
+    displaced_notes: List[Node] = []
+    _leading = True
+    for child in cfg.children:
+        if child.kind in ("comment", "blank"):
+            (prelude if _leading else displaced_notes).append(child)
+            continue
+        _leading = False
+
     # Slots objetivo de reasignaciones manuales: no llenar en Paso 2
     user_target_slots: Set[str] = set()
+    user_source_names: Set[str] = set()
     if reassignments:
         for ra in reassignments:
             if ra.target_slot and ra.target_slot.strip():
                 user_target_slots.add(ra.target_slot.strip().lower())
+            if ra.src_name and ra.src_name.strip():
+                user_source_names.add(ra.src_name.strip())
 
     def take_from(kind: str) -> Optional[InterfaceInfo]:
         for info in pools[kind]:
-            if id(info.node) not in used_nodes:
-                used_nodes.add(id(info.node))
-                return info
+            if id(info.node) in used_nodes:
+                continue
+            # No consumir fuentes de reasignacion manual (se colocan en Paso 3)
+            if info.name in user_source_names:
+                continue
+            # Nativas cuyo propio slot fue reservado para reasignacion manual:
+            # quedan desplazadas (se descartan con warning en Paso 3)
+            if info.name.lower() in user_target_slots:
+                continue
+            used_nodes.add(id(info.node))
+            return info
         return None
 
     # Paso 2: poblar slots del destino en orden
     for slot in layout.slots:
         slot_l = slot.lower()
         used_slots.add(slot_l)
+
+        if slot_l in user_target_slots:
+            # Slot reservado para reasignacion manual (port, wan, dmz, mgmt,
+            # ha, modem): dejar vacio para que Paso 3 lo llene en su posicion
+            # canonica en lugar de anadirlo al final fuera de orden.
+            new_children.append(_make_empty_interface(slot))
+            result.log.append(f"{slot}: reservado para reasignacion manual")
+            if slot_l.startswith("port"):
+                consumed_lan_slots.append(slot)
+            continue
 
         if slot_l.startswith("wan"):
             src = take_from("wan")
@@ -430,25 +463,40 @@ def map_interfaces(
                 new_children.append(_make_empty_interface("mgmt"))
                 result.log.append("mgmt: bloque vacío generado")
         elif slot_l.startswith("port"):
-            if slot_l in user_target_slots:
-                # Slot reservado para reasignacion manual: dejar vacio para Paso 3
-                new_children.append(_make_empty_interface(slot))
-                result.log.append(f"{slot}: reservado para reasignacion manual")
+            # Alineacion canonica: el origen con el mismo nombre del slot es su
+            # ocupante natural. Si es fuente de reasignacion manual (o quedo
+            # desplazado por un slot reservado), el slot queda vacio.
+            src = None
+            identity = next(
+                (i for i in pools["lan_port"]
+                 if id(i.node) not in used_nodes and i.name.lower() == slot_l),
+                None,
+            )
+            if identity is not None:
+                if identity.name not in user_source_names and identity.name.lower() not in user_target_slots:
+                    src = identity
+            else:
+                for info in pools["lan_port"]:
+                    if id(info.node) in used_nodes:
+                        continue
+                    if info.name in user_source_names or info.name.lower() in user_target_slots:
+                        src = None
+                        break
+                    src = info
+                    break
+            if src is not None:
+                used_nodes.add(id(src.node))
+                new = _clone_edit_renaming(src.node, slot)
+                _strip_snmp_index(new)
+                result.mapping[src.name] = slot
+                result.log.append(f"{src.name} -> {slot}")
+                new_children.append(new)
                 consumed_lan_slots.append(slot)
             else:
-                src = take_from("lan_port")
-                if src:
-                    new = _clone_edit_renaming(src.node, slot)
-                    _strip_snmp_index(new)
-                    result.mapping[src.name] = slot
-                    result.log.append(f"{src.name} -> {slot}")
-                    new_children.append(new)
-                    consumed_lan_slots.append(slot)
-                else:
-                    # Recordar como slot vacio disponible para reasignacion
-                    new_children.append(_make_empty_interface(slot))
-                    result.log.append(f"{slot}: bloque vacío generado")
-                    consumed_lan_slots.append(slot)
+                # Recordar como slot vacio disponible para reasignacion
+                new_children.append(_make_empty_interface(slot))
+                result.log.append(f"{slot}: bloque vacío generado")
+                consumed_lan_slots.append(slot)
 
     # Paso 3: procesar excedentes (lo que quedo en los pools)
     # Calcular slots LAN disponibles (los que se generaron como vacios)
@@ -498,8 +546,13 @@ def map_interfaces(
     for info, kind in excedentes:
         src_name = info.name
         if src_name not in reassignment_map:
-            # No hay slot (no vino en reassignments explicitos), descartar
-            _emit_discard_warning(result, info, kind, layout)
+            # No hay slot (no vino en reassignments explicitos), descartar.
+            # Si su propio slot fue reservado para una reasignacion manual,
+            # la interface nativa fue desplazada: avisar con el motivo.
+            reason = ""
+            if src_name.lower() in user_target_slots:
+                reason = f"reemplazada por reasignacion manual a '{src_name}'"
+            _emit_discard_warning(result, info, kind, layout, reason)
             continue
         target_slot = reassignment_map[src_name]
 
@@ -522,6 +575,7 @@ def map_interfaces(
                 if native_origin:
                     # La interface nativa debe volver al pool para posible reasignacion posterior
                     del result.mapping[native_origin]
+                    _warn_displaced_native(result, pools, native_origin, layout, target_slot)
                 # Reemplazar el bloque (sea vacio o nativo)
                 new = _clone_edit_renaming(info.node, target_slot)
                 _strip_snmp_index(new)
@@ -560,10 +614,22 @@ def map_interfaces(
         result.log.append(f"{m.name} (modem) -> conservada")
 
     for l in pools["logical"]:
+        # T4: subinterfaces fisicas (ej. port1.100) renombran junto con su padre
+        name = l.name
+        if "." in name:
+            parent, suffix = name.split(".", 1)
+            new_parent = result.mapping.get(parent)
+            if new_parent and new_parent != parent:
+                renamed = f"{new_parent}.{suffix}"
+                new = _clone_edit_renaming(l.node, renamed)
+                _strip_snmp_index(new)
+                new_children.append(new)
+                result.log.append(f"{name} -> {renamed} (subinterface, padre renombrado)")
+                continue
         new_children.append(l.node)
         result.log.append(f"{l.name} (logical {l.iftype}) -> conservada")
 
-    cfg.children = new_children
+    cfg.children = prelude + new_children + displaced_notes
     return result
 
 
@@ -579,6 +645,33 @@ def _get_role_description(info: InterfaceInfo) -> str:
     if n == "modem":
         return "modem"
     return f"puerto fisico ({info.name})"
+
+
+def _warn_displaced_native(
+    result: MapperResult,
+    pools: Dict[str, List[InterfaceInfo]],
+    native_origin: str,
+    layout: DestinationLayout,
+    target_slot: str,
+) -> None:
+    """Emite un warning cuando una reasignacion manual desplaza una interface
+    nativa que ya fue consumida en Paso 2 (su bloque ya no se emite)."""
+    displaced = None
+    for infos in pools.values():
+        for info in infos:
+            if info.name == native_origin:
+                displaced = info
+                break
+        if displaced is not None:
+            break
+    reason = f"reemplazada por reasignacion manual a '{target_slot}'"
+    if displaced is not None:
+        _emit_discard_warning(result, displaced, displaced.node.meta.get("_class", "logical"), layout, reason)
+    else:
+        result.warnings.append(
+            f"interfaz '{native_origin}' desplazada: su bloque '{target_slot}' fue "
+            f"{reason} y ya no se emite en el output"
+        )
 
 
 def _emit_discard_warning(result: MapperResult, info: InterfaceInfo, kind: str, layout: DestinationLayout, reason: str = "") -> None:

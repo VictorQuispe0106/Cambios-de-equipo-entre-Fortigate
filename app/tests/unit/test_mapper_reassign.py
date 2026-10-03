@@ -254,17 +254,26 @@ class TestReassign(unittest.TestCase):
         self.assertIn("dmz", warns)
 
     def test_manual_reassign_with_target_slot_overwrites_native(self):
-        """Si el usuario elige un slot ocupado por interface nativa, se sobrescribe."""
+        """Si el usuario elige un slot ocupado por interface nativa, se sobrescribe:
+        la interface desplazada emite un warning y el resto del mapping se conserva."""
         from core.interface_mapper import Reassignment
         src = make_backup(dmz=True, lan=[1, 2])
         template = make_backup(lan=[1, 2, 3])
-        # Forzar dmz -> port1 (que tiene internal1 nativamente)
-        manual = [Reassignment(src_name="dmz", src_kind="dmz", target_slot="port1")]
+        # Forzar dmz -> wan1 (slot ocupado por la wan1 nativa del origen)
+        manual = [Reassignment(src_name="dmz", src_kind="dmz", target_slot="wan1")]
         result = run_pipeline(src, template, inject_admin=True, reassignments=manual)
-        # dmz debe estar en port1
-        self.assertEqual(result.mapping.get("dmz"), "port1")
-        # internal1 debe haber sido desplazado
-        self.assertNotIn("internal1", result.mapping)
+        # dmz debe estar en wan1
+        self.assertEqual(result.mapping.get("dmz"), "wan1")
+        # la nativa desplazada (wan1) no queda en mapping
+        self.assertNotIn("wan1", result.mapping)
+        # el resto del mapping se conserva
+        self.assertEqual(result.mapping.get("wan2"), "wan2")
+        self.assertEqual(result.mapping.get("port1"), "port1")
+        self.assertEqual(result.mapping.get("port2"), "port2")
+        # La interface nativa desplazada debe avisar con warning
+        warns = " ".join(result.warnings)
+        self.assertIn("wan1", warns)
+        self.assertIn("reasignacion manual", warns)
 
 
 if __name__ == "__main__":
