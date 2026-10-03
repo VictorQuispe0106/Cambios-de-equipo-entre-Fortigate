@@ -96,17 +96,27 @@ class TestT7AdminInjectorCleanup(unittest.TestCase):
 
     def test_output_lines_identical_after_constant_removal(self):
         # El bloque generado debe seguir siendo el mismo literal canonico
-        ast = parse('config system admin\n    edit "admin"\n    next\nend\n')
-        self.assertTrue(inject_claro(ast))
-        out = render(ast)
-        expected = [
-            '    edit "claro"',
-            '        set accprofile "super_admin"',
-            '        set vdom "root"',
-            '        set password [REDACTED]',
-        ]
-        for line in expected:
-            self.assertIn(line, out)
+        # (env dummy para el password: determinista, nunca commitea el real)
+        import os
+        old = os.environ.get("FORTIGATE_ADMIN_PASSWORD_ENC")
+        os.environ["FORTIGATE_ADMIN_PASSWORD_ENC"] = "ENC DUMMYTESTENC=="
+        try:
+            ast = parse('config system admin\n    edit "admin"\n    next\nend\n')
+            self.assertTrue(inject_claro(ast))
+            out = render(ast)
+            expected = [
+                '    edit "claro"',
+                '        set accprofile "super_admin"',
+                '        set vdom "root"',
+                '        set password ENC DUMMYTESTENC==',
+            ]
+            for line in expected:
+                self.assertIn(line, out)
+        finally:
+            if old is None:
+                os.environ.pop("FORTIGATE_ADMIN_PASSWORD_ENC", None)
+            else:
+                os.environ["FORTIGATE_ADMIN_PASSWORD_ENC"] = old
 
 
 
