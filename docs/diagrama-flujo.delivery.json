@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "9f7c40dc-8a2b-4b71-ad51-37d3713f095e",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "C:\\Users\\E758455\\Desktop\\Opencode-proyects\\CAMBIO DE EQUIPO AUTOMATIZACION\\.archify\\workflow-migracion-fortigate-20260214-153000\\candidate.json",
+  "output": "C:\\Users\\E758455\\Desktop\\Opencode-proyects\\CAMBIO DE EQUIPO AUTOMATIZACION\\docs\\diagrama-flujo.html",
+  "specification": {
+    "sha256": "ea12e44fae5ac9bf22ac757a512ac1f8ef378c71d1347a62739b2893f6b6880c",
+    "bytes": 4924
+  },
+  "artifact": {
+    "sha256": "ee5f118eeb54eac11871db77bf49c02638abe9f5c750262bf68f5d5768d5f8b5",
+    "bytes": 763419
+  }
+}

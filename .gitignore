@@ -18,3 +18,9 @@ Ejemplo_*.conf
 # Internal agent task docs
 odd/
 .atl/
+
+# Archify: working artifacts of the interactive diagram toolchain
+# (the candidate.json source spec stays tracked for regeneration)
+.archify/*
+!.archify/workflow-migracion-fortigate-20260214-153000/candidate.json
+af_out deleted

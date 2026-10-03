@@ -57,6 +57,28 @@ flowchart LR
 > resultado · rojo: tu revisión con reasignación manual (el lazo punteado) —
 > si un excedente no tiene lugar, no se pierde en silencio: vuelve por la UI.
 
+### 🕹️ Versión interactiva (zoom + pan)
+
+El diagrama estático da para entender el flujo, pero si querés **moverte con la
+manito y hacer zoom**, tenés la versión HTML interactiva:
+
+```
+docs/diagrama-flujo.html
+```
+
+- **En tu máquina**: doble clic en el archivo (no necesita servidor).
+- **En GitHub**: habilitá **Settings → Pages** apuntando a la branch `main`
+  (carpeta `/`) y abrí
+  `https://victorquispe0106.github.io/Cambios-de-equipo-entre-Fortigate/docs/diagrama-flujo.html`
+- Incluye: zoom, pan con arrastre, tema claro/oscuro y exportación a
+  PNG/JPEG/WebP/SVG.
+- El fuente del diagrama (schema v2) queda versionado en
+  `.archify/workflow-migracion-fortigate-20260214-153000/candidate.json` para
+  regenerarlo cuando cambie el pipeline, con
+  `npx archify finalize workflow <candidate> <salida.html> --quality showcase`.
+  Los receipts de las compuertas de calidad (validate/deliver/check/
+  browser-check) quedan versionados junto al HTML en `docs/`.
+
 > En GitHub este diagrama se dibuja solo (Mermaid nativo). Si lo leés en texto
 > plano: backup origen + template destino entran al motor (parser → mapper →
 > renamer → admin injector → writer → validator) y salen un `.conf` mapeado y
