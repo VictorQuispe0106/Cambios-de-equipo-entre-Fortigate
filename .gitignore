@@ -11,6 +11,7 @@ playwright-tests/screenshots/
 
 # Example generated/backup outputs (published samples stay out of git history)
 output_*.conf
+Ejemplo_*.conf
 *.tmp
 *.log
 

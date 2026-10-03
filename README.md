@@ -5,11 +5,39 @@ Herramienta que migra el **backup `.conf` de un FortiGate a otro modelo** (ej. 8
 referencias. Funciona con **cualquier modelo FortiGate actual o futuro**: usa el backup
 del equipo destino como plantilla — nada de catálogos hardcoded.
 
+El flujo completo en un diagrama:
+
+```mermaid
+flowchart LR
+    subgraph inputs["📥 Entradas"]
+        SRC["Backup origen\n(.conf del modelo actual)"]
+        TPL["Template destino\n(.conf del modelo nuevo)"]
+    end
+
+    subgraph engine["⚙️ Motor de migración"]
+        direction TB
+        P["parser\nconf → AST\nrecursivo, multi-vdom"]
+        TP["template_parser\nextrae el layout\ndel modelo nuevo"]
+        M["interface_mapper\nrenombra · reordena\nreasigna o descarta\ncon motivo"]
+        R["renamer\ntodas las referencias\nen una sola pasada\nincl. sub-interfaces"]
+        AI["admin_injector\nusuario admin claro\nidempotente"]
+        W["writer\nAST → conf"]
+        V["config_validator\n9 checks de seguridad"]
+        P --> M
+        TP --> M
+        M --> R --> AI --> W
+    end
+
+    OUT["📤 .conf mapeado y listo\n+ log de mapeo + warnings\n+ diff para revisión"]
+
+    W --> V --> OUT
 ```
-.Origen .conf  ┐
-               ├─> parser →_AST→ mapper → renamer → writer → .conf listo para el equipo nuevo
-.Template .conf ┘        (layout destino)     (refs)   (+admin claro)
-```
+
+> En GitHub este diagrama se dibuja solo (Mermaid nativo). Si lo leés en texto
+> plano: backup origen + template destino entran al motor (parser → mapper →
+> renamer → admin injector → writer → validator) y salen un `.conf` mapeado y
+> listo, con su log de mapeo, warnings y diff para que revises antes de subirlo
+> al equipo nuevo.
 
 ## Cómo funciona
 
@@ -57,12 +85,13 @@ CAMBIO DE EQUIPO AUTOMATIZACION/
 │   ├── config/models.json       # referencia histórica de modelos comunes
 │   └── tests/unit/              # 61 tests (suite unittest)
 ├── playwright-tests/            # E2E (spec + config, requiere npx playwright)
-├── Ejemplo_60F/80F/100F.conf    # backups de ejemplo
 └── AGENTS.md                    # brief original del proyecto
 ```
 
 **No se versiona** (`.gitignore`): `node_modules/`, artifacts de Playwright (traces,
-screenshots), outputs generados (`output_*.conf`).
+screenshots), outputs generados (`output_*.conf`) y tus **backups de ejemplo locales**
+(`Ejemplo_*.conf`). Los cargás vos en la UI — no subas backups reales de producción
+al repo.
 
 ## Arranque
 
@@ -88,7 +117,7 @@ Se abre `http://localhost:8765` automáticamente. Sin dependencias externas: sol
 | `POST /api/dry-run` | Corre el pipeline sin escribir salida (validación previa) |
 | `POST /api/process` | Migración completa; devuelve mapeo + warnings + diff |
 | `POST /api/download` | Descarga del `.conf` generado |
-| `GET /sample/<name>.conf` | Backups de ejemplo |
+| `GET /sample/<name>.conf` | Sirve cualquier `.conf` que dejes en la raíz del proyecto |
 | `GET /api/health` | Health check |
 
 ## Notas de diseño
