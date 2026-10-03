@@ -795,6 +795,68 @@ $("#btnDownload").addEventListener("click", async () => {
 });
 
 // ============================================================
+// CREDENCIALES — admin de respaldo (token ENC nunca se muestra)
+// ============================================================
+
+function renderCredStatus(creds) {
+  const el = $("#credStatus");
+  el.textContent = `Credenciales: usuario ${creds.user} · ${creds.token_configured ? "token configurado" : "no configurado"}`;
+  el.classList.toggle("configured", !!creds.token_configured);
+}
+
+async function loadCredentials() {
+  try {
+    const r = await fetch("/api/credentials");
+    const j = await r.json();
+    if (!j.ok) return;
+    renderCredStatus(j);
+    // El token NUNCA viaja en la respuesta: el input queda vacio siempre.
+    if (!$("#credUser").value) $("#credUser").value = j.user || "claro";
+  } catch (e) {
+    console.error("credenciales no disponibles", e);
+    $("#credStatus").textContent = "Credenciales: no disponibles";
+  }
+}
+
+$("#btnSaveCreds").addEventListener("click", async () => {
+  const user = $("#credUser").value.trim();
+  const encToken = $("#credToken").value.trim();
+  if (!user || !encToken) {
+    setStatus("✖ Credenciales incompletas: indica usuario y token ENC.", "warn");
+    return;
+  }
+  const btn = $("#btnSaveCreds");
+  const btnText = btn.querySelector(".btn-text");
+  const originalText = btnText.textContent;
+  btn.disabled = true;
+  btnText.textContent = "Guardando...";
+  try {
+    const r = await fetch("/api/credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user, enc_token: encToken }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      setStatus("✖ Credenciales rechazadas: " + (j.error || "error desconocido"), "error");
+      return;
+    }
+    // Exito: el token nunca se rellena en el input; se limpia y se
+    // refleja solo el estado via status line.
+    $("#credToken").value = "";
+    renderCredStatus(j);
+    setStatus(`✓ Credenciales guardadas · usuario ${j.user} · token configurado`, "ok");
+  } catch (e) {
+    setStatus("✖ Error guardando credenciales: " + e.message, "error");
+  } finally {
+    btnText.textContent = originalText;
+    btn.disabled = false;
+  }
+});
+
+loadCredentials();
+
+// ============================================================
 // GLITCH CSS via class
 // ============================================================
 

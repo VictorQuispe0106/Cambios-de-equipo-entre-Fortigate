@@ -238,6 +238,28 @@
     </label>
   </section>
 
+  <section class="card credentials-card" id="credentialsCard">
+    <div class="step-head">
+      <div class="step-num step-3">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <!-- Candado de credenciales -->
+          <rect x="4" y="11" width="16" height="9" rx="2"/>
+          <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+          <circle cx="12" cy="15.5" r="1.5" fill="currentColor"/>
+        </svg>
+      </div>
+      <h2>Credenciales de respaldo <span class="step-sub">· admin inyectado</span></h2>
+    </div>
+    <div class="credentials-status" id="credStatus">Credenciales: cargando…</div>
+    <div class="credentials-row">
+      <input type="text" id="credUser" class="cred-input" placeholder="usuario (ej. claro)" autocomplete="off">
+      <input type="password" id="credToken" class="cred-input cred-input-token" placeholder="ENC <pegar del FortiGate>" autocomplete="off">
+      <button id="btnSaveCreds" class="btn btn-secondary" type="button">
+        <span class="btn-text">Guardar credenciales</span>
+      </button>
+    </div>
+  </section>
+
   <section class="actions-bar">
     <button id="btnDryRun" class="btn btn-secondary" type="button" disabled>
       <span class="btn-icon">

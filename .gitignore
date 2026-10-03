@@ -1,4 +1,7 @@
 # Python
+# Secrets — NUNCA commitear (hash ENC del admin de respaldo + cualquier secret local)
+.env
+
 node_modules/
 __pycache__/
 *.pyc

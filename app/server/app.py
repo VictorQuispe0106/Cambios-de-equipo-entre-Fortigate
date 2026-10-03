@@ -27,6 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 WEB_DIR = os.path.join(ROOT, "web")
 SAMPLES_DIR = os.path.dirname(ROOT)
+# Root del proyecto (padre de app/): donde vive el .env gitignored
+PROJECT_ROOT = os.path.dirname(ROOT)
 
 sys.path.insert(0, ROOT)
 
@@ -37,6 +39,7 @@ from core.engine import (
 from core.interface_mapper import Reassignment
 from core.template_parser import extract_layout, summarize
 from core.config_validator import validate_config, format_validation_report
+from core.credential_store import load_credentials, save_credentials
 
 
 def _free_port(preferred: int) -> int:
@@ -123,6 +126,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self._send_json({"ok": True})
 
+        if path == "/api/credentials":
+            return self._handle_get_credentials()
+
         self.send_error(404)
 
     def do_POST(self):
@@ -137,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_process()
         if path == "/api/download":
             return self._handle_download()
+        if path == "/api/credentials":
+            return self._handle_save_credentials()
 
         self.send_error(404)
 
@@ -335,6 +343,46 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         self.wfile.write(body)
+
+    def _handle_get_credentials(self):
+        """Estado de credenciales del admin de respaldo.
+
+        Nunca devuelve el token ENC: solo `token_configured`.
+        """
+        creds = load_credentials(PROJECT_ROOT)
+        return self._send_json({
+            "ok": True,
+            "user": creds["user"],
+            "token_configured": creds["token_configured"],
+        })
+
+    def _handle_save_credentials(self):
+        """Guarda usuario + token ENC en el .env del root del proyecto.
+
+        Exige AMBOS campos; el token debe tener la forma 'ENC <base64>'.
+        El token nunca se devuelve ni se loguea.
+        """
+        try:
+            payload = json.loads(self._read_body().decode("utf-8") or "{}")
+        except json.JSONDecodeError as e:
+            return self._send_json({"error": f"JSON invalido: {e}"}, 400)
+
+        if "user" not in payload or "enc_token" not in payload:
+            return self._send_json(
+                {"error": "Faltan campos: se requieren 'user' y 'enc_token'"}, 400)
+
+        try:
+            creds = save_credentials(PROJECT_ROOT, payload.get("user"), payload.get("enc_token"))
+        except ValueError as e:
+            return self._send_json({"error": str(e)}, 400)
+        except Exception as e:
+            return self._send_json({"error": f"Error guardando credenciales: {e}"}, 500)
+
+        return self._send_json({
+            "ok": True,
+            "user": creds["user"],
+            "token_configured": creds["token_configured"],
+        })
 
     def _parse_reassignments(self, ra_raw) -> list:
         reassignments = []

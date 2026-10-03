@@ -1725,6 +1725,45 @@ footer::before {
 }
 
 /* ============================================================
+   CREDENCIALES — compact settings card (admin de respaldo)
+   ============================================================ */
+.credentials-card .step-head { margin-bottom: 10px; }
+
+.credentials-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  color: var(--text-2);
+  margin-bottom: 12px;
+  letter-spacing: 0.02em;
+}
+
+.credentials-status.configured { color: var(--stark-cyan-soft); }
+
+.credentials-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cred-input {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-1);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color 150ms var(--ease-out);
+}
+
+.cred-input:focus { border-color: var(--stark-cyan); }
+
+.cred-input#credUser { width: 200px; }
+.cred-input.cred-input-token { flex: 1 1 260px; min-width: 220px; }
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 760px) {
