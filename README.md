@@ -21,7 +21,7 @@ flowchart LR
         TP["🧠 template_parser<br/>layout del modelo nuevo"]
         M{"🔀 interface_mapper<br/>para cada interfaz del orden:<br/>existe slot en el destino?"}
         R["🔁 renamer<br/>todas las refs en UNA pasada<br/>incl. sub-interfaces portN.subN"]
-        AI["👤 admin_injector<br/>usuario admin claro<br/>idempotente"]
+        AI["👤 admin_injector<br/>usuario admin de respaldo<br/>idempotente"]
         W["💾 writer<br/>AST → conf"]
     end
 
@@ -103,7 +103,7 @@ docs/diagrama-flujo.html
    - **Renombra todas las referencias**: firewall policies, static routes, VPN/IPsec,
      DHCP servers, zones, aggregate/link-monitor members — y verifica que no queden
      **huérfanas** (con ignorancia correcta de macros `$(VDOM_LINKS)`, `*`, `any`).
-   - **Inyecta** (opcional) el usuario admin `claro` en `config system admin`,
+   - **Inyecta** (opcional) un usuario de administración de respaldo en `config system admin`,
      idempotente, avisando si el perfil `super_admin` no existe en la plantilla.
    - **Valida** el output: balance de bloques, edits duplicados, configs incompletos
      (matching por token exacto), referencias a interfaces inexistentes.
@@ -122,7 +122,7 @@ CAMBIO DE EQUIPO AUTOMATIZACION/
 │   │   ├── template_parser.py     # backup destino → DestinationLayout
 │   │   ├── interface_mapper.py    # mapeo + reasignación + descartes razonados
 │   │   ├── renamer.py             # renombrado en una sola pasada + orphans
-│   │   ├── admin_injector.py      # usuario admin 'claro' idempotente
+│   │   ├── admin_injector.py      # usuario admin de respaldo (idempotente)
 │   │   ├── config_validator.py    # validación de output
 │   │   ├── model_detector.py      # modelon desde #config-version=
 │   │   ├── engine.py              # orquestador (run_pipeline)

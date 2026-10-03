@@ -1,7 +1,7 @@
 # Cambio de Equipo FortiGate
 
 Migracion de backups `.conf` entre modelos FortiGate (ej. 80F -> 100F) ajustando
-interfaces fisicas y agregando el usuario admin `claro`. Funciona con **cualquier
+interfaces fisicas y agregando un usuario de administracion de respaldo. Funciona con **cualquier
 modelo FortiGate** sin cambios de codigo: usa un backup de referencia del modelo
 destino como plantilla.
 
@@ -43,7 +43,7 @@ app/
     template_parser.py   # Backup destino -> DestinationLayout
     interface_mapper.py  # Motor de mapeo
     renamer.py           # Reescribe referencias
-    admin_injector.py    # Inyecta usuario 'claro'
+    admin_injector.py    # Inyecta usuario admin de respaldo
     engine.py            # Orquestador
     model_detector.py    # Lee #Config-version= del backup
     interface_classifier.py
@@ -58,7 +58,7 @@ app/
 
 ## Reglas
 
-- Solo se reescribe `config system interface` (interfaces fisicas) y se inyecta el usuario `claro` en `config system admin`.
+- Solo se reescribe `config system interface` (interfaces fisicas) y se inyecta el usuario de administracion de respaldo en `config system admin`.
 - `set snmp-index N` se elimina de las interfaces fisicas reescritas.
 - Las interfaces logicas (naf.root, l2t.root, ssl.root, fortilink, LAN virtual switch, tuneles, agregados) se conservan tal cual.
 - Si el destino tiene mas puertos que el origen, se generan bloques vacios `type physical`.

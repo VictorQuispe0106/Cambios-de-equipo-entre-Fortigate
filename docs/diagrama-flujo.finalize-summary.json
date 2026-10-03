@@ -7,13 +7,13 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\Users\\E758455\\Desktop\\Opencode-proyects\\CAMBIO DE EQUIPO AUTOMATIZACION\\.archify\\workflow-migracion-fortigate-20260214-153000\\candidate.json",
-    "sha256": "ea12e44fae5ac9bf22ac757a512ac1f8ef378c71d1347a62739b2893f6b6880c",
-    "bytes": 4924
+    "sha256": "100fa9a1067fc062b942e93550f442175848f907e8b61f59c716a134a8d2feda",
+    "bytes": 5171
   },
   "artifact": {
     "path": "C:\\Users\\E758455\\Desktop\\Opencode-proyects\\CAMBIO DE EQUIPO AUTOMATIZACION\\docs\\diagrama-flujo.html",
-    "sha256": "ee5f118eeb54eac11871db77bf49c02638abe9f5c750262bf68f5d5768d5f8b5",
-    "bytes": 763419
+    "sha256": "5ba5e08165f1fa6bc2925cdbb3a4cbd52088975525d1421e6c6b411384a559a3",
+    "bytes": 763435
   },
   "gates": {
     "validate": "pass",
@@ -43,5 +43,5 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 18521
+  "durationMs": 11038
 }
