@@ -65,6 +65,8 @@ class DestinationLayout:
     slots: List[str] = field(default_factory=list)
     logical_names: List[str] = field(default_factory=list)
     modem_names: List[str] = field(default_factory=list)
+    # T8: fisicos no canonicos que NO son modem* (ej. fortilink, "a")
+    _misc_physicals: List[str] = field(default_factory=list)
 
     @property
     def wan_count(self) -> int:
@@ -163,30 +165,6 @@ def _clone_edit_renaming(node: Node, new_name: str) -> Node:
     return new_node
 
 
-def _classify_excedent(name: str, iftype: str) -> str:
-    """
-    Devuelve la clase de un interface origen para decidir si se reasigna
-    o se descarta. Las WAN, dmz, ha, modem y puertos fisicos no canonicos
-    son reasignables. Las logicas se conservan.
-    """
-    n = name.lower()
-    if n.startswith("wan"):
-        return "wan"
-    if n in ("ha1", "ha2"):
-        return "ha"
-    if n == "dmz":
-        return "dmz"
-    if n == "modem":
-        return "modem"
-    if iftype in {"tunnel", "aggregate", "vdom-link", "vlan", "switch"}:
-        return "logical"
-    if iftype == "physical":
-        # Puertos fisicos no canonicos (a, b, fortilink, internal1, port1...)
-        # Si el destino tiene un portN vacio, se reasigna
-        return "physical_other"
-    return "ignore"
-
-
 def _priority_order(kind: str) -> int:
     """Prioridad para asignar slots vacios (menor = antes)."""
     order = {
@@ -198,17 +176,6 @@ def _priority_order(kind: str) -> int:
         "physical_other": 5,
     }
     return order.get(kind, 99)
-
-
-def _available_lan_slots(layout: DestinationLayout, layout_lan_pool: List[str]) -> List[str]:
-    """
-    Devuelve la lista de slots LAN del destino que se generaron como vacios
-    (no usados por el clasificador del origen).
-    """
-    # Por defecto, TODOS los slots portN del layout son candidatos.
-    # El caller marcara cuales fueron consumidos por interfaces origen.
-    return layout.lan_names[:]
-
 
 # ============================================================
 # Deteccion de propuesta de reasignacion (antes de procesar)

@@ -10,18 +10,8 @@ Bloque (literal del AGENTS.md):
 """
 
 from __future__ import annotations
-from typing import List
 
 from .parser import Node, AST, find_config
-
-
-CLARO_BLOCK_LINES: List[str] = [
-    'edit "claro"',
-    '    set accprofile "super_admin"',
-    '    set vdom "root"',
-    '    set password [REDACTED]',
-    "next",
-]
 
 
 def _has_claro(cfg: Node) -> bool:
@@ -42,6 +32,22 @@ def inject_claro(ast: AST) -> bool:
 
     if _has_claro(cfg):
         return False
+
+    # Si el backup no trae ningun `edit "super_admin"` en
+    # `config system accprofile`, el accprofile del bloque puede quedar
+    # sin definicion en el destino. Aunque sea asi, inyectamos igual:
+    # el operador tendra visibilidad del warning y puede crear el perfil
+    # mas tarde. No bloqueamos la migracion por falta del perfil.
+    # (Comportamiento documentado: advertir y continuar.)
+    accprofile_cfg = find_config(ast, "system accprofile")
+    if accprofile_cfg is None or not any(
+        child.kind == "edit" and child.meta.get("name") == "super_admin"
+        for child in accprofile_cfg.children
+    ):
+        print(
+            "WARNING: no existe edit 'super_admin' en config system accprofile; "
+            "se inyecta claro con accprofile 'super_admin' sin perfil creado"
+        )
 
     # Construimos los nodos del bloque.
     indent = "    "

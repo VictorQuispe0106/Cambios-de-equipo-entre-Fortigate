@@ -53,6 +53,10 @@ def validate_config(text: str) -> ValidationResult:
     # 4. Interfaces definidas vs referenciadas
     _check_interface_references(lines, result)
     
+    # 4b. `set member` como referencia a interfaz (solo contextos concretos:
+    # no address/service groups). Vuelve a aplicar el chequeo de huerfanos.
+    _check_member_interface_refs(lines, result)
+
     # 5. Configuraciones incompletas
     _check_incomplete_configs(lines, result)
     
@@ -243,6 +247,128 @@ def _check_interface_references(lines: List[str], result: ValidationResult):
             )
 
 
+def _collect_defined_interfaces(lines: List[str]) -> Set[str]:
+    """Nombres de interfaces definidos en config system interface."""
+    defined: Set[str] = set()
+    in_interface_config = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "config system interface":
+            in_interface_config = True
+            continue
+        elif stripped == "end" and in_interface_config:
+            in_interface_config = False
+            continue
+        if in_interface_config and stripped.startswith("edit "):
+            name = stripped[len("edit "):].strip().strip('"')
+            if name:
+                defined.add(name)
+    return defined
+
+
+# Contextos de config en los que `set member` SÍ referencia interfaces.
+# Se excluyen explicitamente address/service groups: sus members no son
+# interfaces y no deben chequearse (invariante historica).
+_MEMBER_CONTEXT_CONFIGS = {
+    "firewall aggregate",
+    "system link-monitor",
+    "system virtual-switch",
+    "system zone",
+}
+
+# Dentro de config system interface, un `set member` en un edit cuyo
+# `set type` es uno de estos tambien referencia interfaces (aggregate,
+# virtual-switch). Sino, no es una referencia a interfaz.
+_MEMBER_IFTYPES = {"aggregate", "virtual-switch"}
+
+
+def _check_member_interface_refs(lines: List[str], result: ValidationResult):
+    """
+    Chequea que `set member` referencie interfaces existentes, PERO solo en
+    los contextos donde member ES una referencia a interfaz:
+      - config firewall aggregate / system link-monitor / system virtual-switch / system zone
+      - edits de config system interface con set type aggregate/virtual-switch
+
+    Para address/service groups (y cualquier otro contexto) NO se avisa:
+    sus members no son interfaces. Si no podemos determinar interfaces
+    definidas (no hay config system interface), se salta el chequeo.
+    """
+    defined = _collect_defined_interfaces(lines)
+    if not defined:
+        return  # contexto no cognoscible: sin refs a chequear
+
+    config_stack: List[str] = []  # nombres de config abiertos
+    edit_stack: List[str] = []
+    in_edit_type: Optional[str] = None  # set type del edit actual en system interface
+    line_no = 0
+
+    for line in lines:
+        line_no += 1
+        stripped = line.strip()
+
+        if stripped.startswith("config ") and not stripped.startswith("config-"):
+            config_stack.append(stripped[len("config "):].strip())
+            edit_stack = []
+            in_edit_type = None
+            continue
+        if stripped == "end":
+            if config_stack:
+                config_stack.pop()
+            edit_stack = []
+            in_edit_type = None
+            continue
+        if stripped.startswith("edit ") and not stripped.startswith("editor"):
+            edit_stack.append(stripped[len("edit "):].strip().strip('"'))
+            in_edit_type = None
+            continue
+        if stripped.startswith("next"):
+            if edit_stack:
+                edit_stack.pop()
+            in_edit_type = None
+            continue
+
+        if not stripped.startswith("set "):
+            continue
+
+        key, _, value = stripped[4:].partition(" ")
+        key = key.strip()
+        value = value.strip()
+
+        # Recordar el tipo del edit actual (solo relevante dentro de system interface)
+        if key == "type" and config_stack and config_stack[-1] == "system interface" and edit_stack:
+            in_edit_type = value.strip('"').lower()
+            continue
+
+        if key != "member" or not value:
+            continue
+
+        # Determinar contexto: cadena de configs padre
+        context = None
+        cfg_path = config_stack[-1].lower() if config_stack else ""
+        if cfg_path in _MEMBER_CONTEXT_CONFIGS:
+            context = cfg_path
+        elif (
+            config_stack
+            and config_stack[-1] == "system interface"
+            and edit_stack
+            and in_edit_type in _MEMBER_IFTYPES
+        ):
+            context = f"system interface ({in_edit_type})"
+
+        if context is None:
+            continue  # contexto desconocido o excluido: no chequear
+
+        refs = re.findall(r'"([^"]+)"', value)
+        if not refs:
+            refs = [t for t in value.split() if t]
+        for ref in refs:
+            if ref and ref not in defined:
+                result.warnings.append(
+                    f"Línea {line_no}: 'set member' en '{context}' referencia la "
+                    f"interfaz '{ref}' que no está definida en 'config system interface'"
+                )
+
+
 def _check_incomplete_configs(lines: List[str], result: ValidationResult):
     """Detecta configs vacíos o con configuración incompleta."""
     line_no = 0
@@ -280,9 +406,15 @@ def _check_incomplete_configs(lines: List[str], result: ValidationResult):
             has_content = False
         elif stripped == "end":
             if config_start > 0 and not has_content:
-                # Skip known empty configs (check if config_name contains any known pattern)
+                # Coincidencia por TOKEN completo del nombre de config:
+                # solo se suprime cuando un token del nombre (o la ruta
+                # completa, para claves multi-palabra) coincide exactamente.
+                # Ej.: `config system sip` se suprime; `config firewall
+                # sip-policy` NO se debe suprimir (solo subcontain substring).
+                name_tokens = config_name.lower().split()
                 is_known_empty = any(
-                    k in config_name.lower() for k in KNOWN_EMPTY_CONFIGS
+                    name_tokens == k.split() or k in name_tokens
+                    for k in KNOWN_EMPTY_CONFIGS
                 )
                 if not is_known_empty:
                     result.warnings.append(

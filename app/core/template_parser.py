@@ -37,10 +37,7 @@ class _LegacyDestinationLayout:
     lan_names: List[str] = field(default_factory=list)
     logical_names: List[str] = field(default_factory=list)
     modem_names: List[str] = field(default_factory=list)
-
-    @property
-    def has_wan(self) -> bool:
-        return self.wan_count > 0
+    _misc_physicals: List[str] = field(default_factory=list)
 
     @property
     def lan_count(self) -> int:
@@ -175,8 +172,14 @@ def extract_layout(template_text: str) -> DestinationLayout:
             if name not in info.modem_names:
                 info.modem_names.append(name)
         elif kind == "preserve_physical":
-            if name not in info.modem_names:
-                info.modem_names.append(name)
+            # T8: solo los nombres que empiezan por modem (case-insensitive)
+            # pertenecen al bucket de modems; los demas fisicos no canonicos
+            # se recogen en _misc_physicals para no confundir al consumidor.
+            if re.match(r"^modem", name, re.IGNORECASE):
+                if name not in info.modem_names:
+                    info.modem_names.append(name)
+            elif name not in info._misc_physicals:
+                info._misc_physicals.append(name)
 
     # Normalizar LAN a portN
     info.lan_names = [_normalize_lan_name(name, idx) for idx, name in enumerate(lan_order, start=1)]
@@ -200,6 +203,7 @@ def extract_layout(template_text: str) -> DestinationLayout:
         slots=slots,
         logical_names=info.logical_names,
         modem_names=info.modem_names,
+        _misc_physicals=info._misc_physicals,
     )
     return layout
 

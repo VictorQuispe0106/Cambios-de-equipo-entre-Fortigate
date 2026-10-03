@@ -110,11 +110,34 @@ def parse(text: str) -> AST:
 
 
 def find_config(ast: AST, name: str) -> Optional[Node]:
-    """Busca un nodo config por nombre exacto a nivel raiz del AST."""
-    for node in ast.nodes[0].children:
-        if node.kind == "config" and node.meta.get("name") == name:
-            return node
-    return None
+    """
+    Busca un nodo config por nombre exacto.
+
+    Prioriza la coincidencia a nivel raiz. Si no existe, busca recursivamente
+    dentro de bloques edit (backups multi-vdom: `config vdom` -> `edit root` ->
+    `config system admin`, etc.), hasta una profundidad razonable.
+    """
+    def _search(children, allow_nested: bool) -> Optional[Node]:
+        for node in children:
+            if node.kind == "config" and node.meta.get("name") == name:
+                return node
+        if not allow_nested:
+            return None
+        for node in children:
+            # Descendemos solo por config y edit (los configs solo se anidan
+            # dentro de edits en backups multi-vdom).
+            if node.kind in ("config", "edit"):
+                found = _search(node.children, allow_nested=True)
+                if found is not None:
+                    return found
+        return None
+
+    root_children = ast.nodes[0].children
+    # Preferir la coincidencia a nivel raiz si existe
+    found = _search(root_children, allow_nested=False)
+    if found is not None:
+        return found
+    return _search(root_children, allow_nested=True)
 
 
 def get_set_value(node: Node, key: str) -> Optional[str]:
