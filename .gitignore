@@ -24,3 +24,4 @@ odd/
 .archify/*
 !.archify/workflow-migracion-fortigate-20260214-153000/candidate.json
 af_out deleted
+AGENTS.md
