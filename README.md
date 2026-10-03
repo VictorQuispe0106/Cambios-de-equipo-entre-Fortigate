@@ -10,28 +10,52 @@ El flujo completo en un diagrama:
 ```mermaid
 flowchart LR
     subgraph inputs["📥 Entradas"]
-        SRC["Backup origen\n(.conf del modelo actual)"]
-        TPL["Template destino\n(.conf del modelo nuevo)"]
+        direction TB
+        SRC["🗂️ Backup origen<br/>conf del modelo actual"]
+        TPL["🧩 Template destino<br/>conf del modelo nuevo"]
     end
 
     subgraph engine["⚙️ Motor de migración"]
         direction TB
-        P["parser\nconf → AST\nrecursivo, multi-vdom"]
-        TP["template_parser\nextrae el layout\ndel modelo nuevo"]
-        M["interface_mapper\nrenombra · reordena\nreasigna o descarta\ncon motivo"]
-        R["renamer\ntodas las referencias\nen una sola pasada\nincl. sub-interfaces"]
-        AI["admin_injector\nusuario admin claro\nidempotente"]
-        W["writer\nAST → conf"]
-        V["config_validator\n9 checks de seguridad"]
-        P --> M
-        TP --> M
-        M --> R --> AI --> W
+        P["📄 parser<br/>conf → AST<br/>recursivo · multi-vdom"]
+        TP["🧠 template_parser<br/>layout del modelo nuevo"]
+        M{"🔀 interface_mapper<br/>para cada interfaz del orden:<br/>existe slot en el destino?"}
+        R["🔁 renamer<br/>todas las refs en UNA pasada<br/>incl. sub-interfaces portN.subN"]
+        AI["👤 admin_injector<br/>usuario admin claro<br/>idempotente"]
+        W["💾 writer<br/>AST → conf"]
     end
 
-    OUT["📤 .conf mapeado y listo\n+ log de mapeo + warnings\n+ diff para revisión"]
+    V{{"✅ config_validator<br/>huérfanas · balance · incompletos · dups"}}
+    OUT[["📤 .conf mapeado y listo<br/>+ log de mapeo + warnings<br/>+ diff para revisión"]]
 
-    W --> V --> OUT
+    SRC -->|"texto .conf"| P
+    TPL -->|"layout destino"| TP
+    P -->|AST| M
+    TP -->|slots| M
+    M -->|"mapping viejo → nuevo<br/>reescribe toda referencia"| R
+    R --> AI --> W --> V
+    V -->|"válido o con pendientes"| OUT
+
+    M -- "descartes con motivo<br/>y slots libres" --> UI["🖥️ UI<br/>revisión + reasignación manual<br/>a cualquier tipo de slot"]
+    UI -. "reasignaciones elegidas" .-> M
+
+    classDef inp fill:#dbeafe,stroke:#1e40af,color:#0f172a,stroke-width:2px
+    classDef stage fill:#dcfce7,stroke:#15803d,color:#0f172a,stroke-width:1px
+    classDef gate fill:#fef9c3,stroke:#a16207,color:#0f172a,stroke-width:2px
+    classDef outp fill:#f3e8ff,stroke:#7e22ce,color:#0f172a,stroke-width:2px
+    classDef human fill:#fee2e2,stroke:#b91c1c,color:#0f172a,stroke-width:2px
+
+    class SRC,TPL inp
+    class P,TP,R,AI,W stage
+    class M,V gate
+    class OUT outp
+    class UI human
 ```
+
+> En GitHub este diagrama se dibuja solo (Mermaid nativo). Azul: entradas ·
+> verde: etapas del motor · amarillo: decisiones y validación · violeta:
+> resultado · rojo: tu revisión con reasignación manual (el lazo punteado) —
+> si un excedente no tiene lugar, no se pierde en silencio: vuelve por la UI.
 
 > En GitHub este diagrama se dibuja solo (Mermaid nativo). Si lo leés en texto
 > plano: backup origen + template destino entran al motor (parser → mapper →
