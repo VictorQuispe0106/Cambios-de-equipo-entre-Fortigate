@@ -26,6 +26,20 @@ from .model_detector import detect_model
 from .interface_mapper import DestinationLayout
 
 
+def _explicit_metadata_class(role: Optional[str], dedicated_to: Optional[str],
+                             alias: Optional[str], vrf: Optional[str]) -> Optional[str]:
+    """T2: clase explicita segun metadata FortiOS. Priman los metadatos
+    (set role, set dedicated-to, set vrf, alias GESTION) sobre el nombre.
+    Devuelve "wan"/"dmz"/"lan"/"mgmt" o None si no hay metadata explicita."""
+    r = (role or "").strip().strip('"').lower()
+    if r in ("wan", "dmz", "lan"):
+        return r
+    d = (dedicated_to or "").strip().strip('"').lower()
+    if d == "management" or vrf or (alias and "GESTION" in alias.upper()):
+        return "mgmt"
+    return None
+
+
 @dataclass
 class _LegacyDestinationLayout:
     """Layout intermedio con campos extra para preview."""
@@ -38,6 +52,10 @@ class _LegacyDestinationLayout:
     logical_names: List[str] = field(default_factory=list)
     modem_names: List[str] = field(default_factory=list)
     _misc_physicals: List[str] = field(default_factory=list)
+    # T1: nombres REALES recolectados por clase especial (no literales)
+    dmz_names: List[str] = field(default_factory=list)
+    mgmt_names: List[str] = field(default_factory=list)
+    ha_names: List[str] = field(default_factory=list)
 
     @property
     def lan_count(self) -> int:
@@ -53,9 +71,21 @@ def _classify_destination_edit(name: str, iftype: str, alias: Optional[str],
     """
     Devuelve una etiqueta para clasificar una interface del backup destino.
     None = no reconocida (no es ni wan/mgmt/dmz/ha/lan ni modem ni logica conocida).
+
+    T2: los metadatos explicitos (set role / set dedicated-to / set vrf /
+    alias GESTION) priman sobre los prefijos de nombre.
     """
     n = name.lower()
 
+    # 1. Metadata explicita (role-first) SOLO para fisicos: las logicas
+    #    (switch/loopback/tunnel...) llevan `set role lan` en backups reales
+    #    y deben seguir siendo logicas, no slots.
+    if iftype == "physical":
+        meta_kind = _explicit_metadata_class(role, dedicated_to, alias, vrf)
+        if meta_kind is not None:
+            return meta_kind
+
+    # 2. Fallback por nombre (comportamiento previo)
     # WAN
     if n.startswith("wan"):
         return "wan"
@@ -65,16 +95,11 @@ def _classify_destination_edit(name: str, iftype: str, alias: Optional[str],
         return "ha"
 
     # DMZ
-    if n == "dmz" or (role and role.strip().strip('"') == "dmz"):
+    if n == "dmz":
         return "dmz"
 
     # MGMT
-    if (
-        n == "mgmt"
-        or (dedicated_to and dedicated_to.strip().strip('"') == "management")
-        or (alias and "GESTION" in alias.upper())
-        or vrf
-    ):
+    if n == "mgmt":
         return "mgmt"
 
     # Modem
@@ -138,6 +163,10 @@ def extract_layout(template_text: str) -> DestinationLayout:
     wan_order: List[str] = []
     lan_order: List[str] = []
     seen_lan: set = set()
+    # T1: nombres reales recolectados por clase especial (no literales)
+    dmz_order: List[str] = []
+    mgmt_order: List[str] = []
+    ha_order: List[str] = []
 
     # Switches de hardware del destino (config system switch-interface):
     # nombre del switch -> miembros fisicos. En equipos como el FortiWiFi 40F
@@ -183,10 +212,16 @@ def extract_layout(template_text: str) -> DestinationLayout:
                 wan_order.append(name)
         elif kind == "ha":
             info.has_ha = True
+            if name not in ha_order:
+                ha_order.append(name)
         elif kind == "dmz":
             info.has_dmz = True
+            if name not in dmz_order:
+                dmz_order.append(name)
         elif kind == "mgmt":
             info.has_mgmt = True
+            if name not in mgmt_order:
+                mgmt_order.append(name)
         elif kind == "lan":
             if name not in seen_lan:
                 lan_order.append(name)
@@ -210,17 +245,18 @@ def extract_layout(template_text: str) -> DestinationLayout:
     # Los slots conservan el nombre real de la interfaz en el backup destino:
     # renombrar a wanN/portN normalizados crearia interfaces inexistentes.
     info.lan_names = list(lan_order)
+    info.dmz_names = list(dmz_order)
+    info.mgmt_names = list(mgmt_order)
+    info.ha_names = list(ha_order)
 
-    # Construir slots en orden canonico
+    # Construir slots en orden canonico usando los NOMBRES REALES del backup
+    # destino (dmz..., mgmt..., wan..., ha..., lan..., misc): regenerar
+    # literales ('dmz', 'mgmt', 'ha1') crearia interfaces inexistentes.
     slots: List[str] = []
-    if info.has_dmz:
-        slots.append("dmz")
-    if info.has_mgmt:
-        slots.append("mgmt")
+    slots.extend(dmz_order)
+    slots.extend(mgmt_order)
     slots.extend(wan_order)
-    if info.has_ha:
-        slots.append("ha1")
-        slots.append("ha2")
+    slots.extend(ha_order)
     slots.extend(info.lan_names)
     slots.extend(info._misc_physicals)
 
@@ -232,6 +268,9 @@ def extract_layout(template_text: str) -> DestinationLayout:
         modem_names=info.modem_names,
         _misc_physicals=info._misc_physicals,
         switch_members=switch_members,
+        dmz_names=info.dmz_names,
+        mgmt_names=info.mgmt_names,
+        ha_names=info.ha_names,
     )
     return layout
 

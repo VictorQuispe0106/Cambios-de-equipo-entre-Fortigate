@@ -151,6 +151,99 @@ class TestExtractLayout(unittest.TestCase):
         self.assertIn("a", layout.slots)
         self.assertEqual(layout.slots, ["wan", "a"])
 
+    # ============================================================
+    # T1 (model-agnostic hardening): los slots de clases especiales
+    # (dmz/mgmt/ha) deben usar los NOMBRES REALES del template.
+    # ============================================================
+
+    def test_dmz_real_names_become_slots(self):
+        """A template whose DMZ physicals are named dmz1/dmz2 with
+        `set role dmz` must produce real-name slots, not a literal 'dmz'."""
+        text = [
+            "config system interface",
+            '    edit "wan1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "dmz1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '        set role dmz',
+            '    next',
+            '    edit "dmz2"',
+            '        set vdom "root"',
+            '        set type physical',
+            '        set role dmz',
+            '    next',
+            '    edit "port1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            "end",
+        ]
+        layout = extract_layout("\n".join(text) + "\n")
+        self.assertIn("dmz1", layout.slots)
+        self.assertIn("dmz2", layout.slots)
+        self.assertNotIn("dmz", layout.slots)
+        # Orden canonico: dmz... antes de wan y lan
+        self.assertEqual(layout.slots[:3], ["dmz1", "dmz2", "wan1"])
+        self.assertTrue(layout.has_dmz)
+
+    def test_mgmt_real_name_slot(self):
+        """A management port named e.g. 'x1' (dedicated-to management) must
+        produce a slot with its real name, not a literal 'mgmt'."""
+        text = [
+            "config system interface",
+            '    edit "wan1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "x1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '        set dedicated-to management',
+            '    next',
+            '    edit "x2"',
+            '        set vdom "root"',
+            '        set type physical',
+            '        set alias "VRF_GESTION"',
+            '    next',
+            '    edit "port1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            "end",
+        ]
+        layout = extract_layout("\n".join(text) + "\n")
+        self.assertIn("x1", layout.slots)
+        self.assertIn("x2", layout.slots)
+        self.assertNotIn("mgmt", layout.slots)
+        self.assertTrue(layout.has_mgmt)
+        # Orden canonico: dmz(no hay), mgmt, wan...
+        self.assertEqual(layout.slots[:3], ["x1", "x2", "wan1"])
+
+    def test_ha_real_name_slots(self):
+        """HA physicals must use their collected real names as slots."""
+        text = [
+            "config system interface",
+            '    edit "wan1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "ha1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "ha2"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            "end",
+        ]
+        layout = extract_layout("\n".join(text) + "\n")
+        self.assertEqual(layout.slots[1:], ["ha1", "ha2"])
+        self.assertTrue(layout.has_ha)
+
     def test_switch_members_detected(self):
         """Hardware switch interfaces of the template must be detected so the
         mapper can avoid auto-filling member ports and offer the switch as a

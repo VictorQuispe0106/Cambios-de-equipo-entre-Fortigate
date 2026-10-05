@@ -74,6 +74,21 @@ class DestinationLayout:
     # (ej. {"LAN2_CLIENTE": ["lan1", "lan2"]}). Los slots miembros no deben
     # auto-llenarse con interfaces ruteadas; el switch es destino de reasignacion.
     switch_members: Dict[str, List[str]] = field(default_factory=dict)
+    # T1: nombres reales recolectados por clase especial en el template.
+    # Los slots dmz/mgmt/ha NO son siempre literales: un modelo puede llamar
+    # dmz1/dmz2 a sus DMZ, o x1/x2 a sus puertos de gestion.
+    dmz_names: List[str] = field(default_factory=list)
+    mgmt_names: List[str] = field(default_factory=list)
+    ha_names: List[str] = field(default_factory=list)
+
+    def _special_sets(self) -> Tuple[Set[str], Set[str], Set[str]]:
+        """Conjuntos (lowercase) de slots dmz / mgmt / ha. Incluye los nombres
+        literales clasicos como fallback para layouts construidos a mano
+        (DestinationProfile) donde las listas reales no se poblaron."""
+        dmz = {"dmz"} | {n.lower() for n in self.dmz_names}
+        mgmt = {"mgmt"} | {n.lower() for n in self.mgmt_names}
+        ha = {"ha1", "ha2"} | {n.lower() for n in self.ha_names}
+        return dmz, mgmt, ha
 
     @property
     def switch_names(self) -> List[str]:
@@ -84,11 +99,14 @@ class DestinationLayout:
     @property
     def lan_names(self) -> List[str]:
         """Slots fisicos asignables como LAN (nombres reales, incluye fisicos
-        no canonicos como 'a'; excluye wan*/dmz/mgmt/ha/modem)."""
+        no canonicos como 'a'; excluye wan*/dmz/mgmt/ha/modem, incluidos los
+        nombres reales de esas clases, no solo los literales)."""
+        dmz, mgmt, ha = self._special_sets()
+        special = dmz | mgmt | ha | {"modem"}
         return [
             s for s in self.slots
             if not s.lower().startswith("wan")
-            and s.lower() not in self._SPECIAL_NON_LAN
+            and s.lower() not in special
         ]
 
     @property
@@ -101,15 +119,18 @@ class DestinationLayout:
 
     @property
     def has_mgmt(self) -> bool:
-        return any(s.lower() == "mgmt" for s in self.slots)
+        _, mgmt, _ = self._special_sets()
+        return any(s.lower() in mgmt for s in self.slots)
 
     @property
     def has_dmz(self) -> bool:
-        return any(s.lower() == "dmz" for s in self.slots)
+        dmz, _, _ = self._special_sets()
+        return any(s.lower() in dmz for s in self.slots)
 
     @property
     def has_ha(self) -> bool:
-        return any(s.lower() in ("ha1", "ha2") for s in self.slots)
+        _, _, ha = self._special_sets()
+        return any(s.lower() in ha for s in self.slots)
 
     @property
     def lan_count(self) -> int:
@@ -157,6 +178,84 @@ class MapperResult:
 # ============================================================
 # Helpers
 # ============================================================
+
+def _explicit_metadata_class(role, dedicated_to, alias, vrf) -> Optional[str]:
+    """T2: clase explicita segun metadata FortiOS, en el vocabulario del
+    clasificador de origen (wan/dmz/lan_port/mgmt) o None si no hay metadata.
+    Los metadatos explicitos priman sobre los prefijos de nombre."""
+    r = (role or "").strip().strip('"').lower()
+    if r == "wan":
+        return "wan"
+    if r == "dmz":
+        return "dmz"
+    if r == "lan":
+        return "lan_port"
+    d = (dedicated_to or "").strip().strip('"').lower()
+    if d == "management" or vrf or (alias and "GESTION" in alias.upper()):
+        return "mgmt"
+    return None
+
+
+def _restamp_metadata_overrides(classified: List[InterfaceInfo]) -> None:
+    """T2: correccion post-classificacion para el lado ORIGEN (no se puede
+    editar interface_classifier.py): re-sella meta["_class"] de los fisicos
+    cuyo set role / set vrf / alias GESTION contradice la clase por nombre.
+    Solo afecta fisicos; las logicas conservan su clase."""
+    for info in classified:
+        if not info.is_physical:
+            continue
+        meta_kind = _explicit_metadata_class(info.role, info.dedicated_to, info.alias, info.vrf)
+        if meta_kind is None:
+            continue
+        if info.node.meta.get("_class") != meta_kind:
+            info.node.meta["_class"] = meta_kind
+
+
+def apply_role_first_correction(ast: AST) -> None:
+    """T2: API publica: clasifica el AST del origen y aplica la correccion
+    role-first sobre meta["_class"] (ver _restamp_metadata_overrides)."""
+    classified = classify(ast)
+    _restamp_metadata_overrides(classified)
+
+
+def _routed_source_names(cfg: Node) -> Set[str]:
+    """T3: nombres (lowercase) de interfaces fisicas del ORIGEN que son
+    ruteadas: tienen `set ip`, `set mode` distinto de static (dhcp/pppoe...),
+    o son padre de al menos una interfaz vlan.
+
+    Nota: los backups reales a veces omiten `set type vlan` en las
+    subinterfaces (tipo implicito); un edit de config system interface con
+    `set interface` + `set vlanid` tambien se considera vlan."""
+    routed: Set[str] = set()
+    edits = [c for c in cfg.children if c.kind == "edit"]
+    for edit in edits:
+        name = edit.meta.get("name", "")
+        if not name:
+            continue
+        if get_set_value(edit, "ip"):
+            routed.add(name.lower())
+        mode = (get_set_value(edit, "mode") or "").strip().strip('"').lower()
+        if mode and mode != "static":
+            routed.add(name.lower())
+    for edit in edits:
+        iftype = (get_set_value(edit, "type") or "").strip().strip('"').lower()
+        parent = (get_set_value(edit, "interface") or "").strip().strip('"').lower()
+        if not parent:
+            continue
+        is_vlan = iftype == "vlan" or get_set_value(edit, "vlanid")
+        if is_vlan:
+            routed.add(parent)
+    return routed
+
+
+def is_routed_source(ast: AST, name: str) -> bool:
+    """T3: True si la interface fisica `name` del backup origen es ruteada
+    (set ip, mode != static, o padre de una vlan)."""
+    cfg = find_config(ast, "system interface")
+    if cfg is None:
+        return False
+    return name.lower() in _routed_source_names(cfg)
+
 
 def _strip_snmp_index(node: Node) -> None:
     remove_set(node, "snmp-index")
@@ -261,6 +360,10 @@ def detect_reassignments(src_text: str, template_text: str) -> Tuple[List[Reassi
     layout = extract_layout(template_text)
     ast = parse(src_text)
     classified = classify(ast)
+    # T2: role-first correction sobre la clasificacion por nombre
+    _restamp_metadata_overrides(classified)
+    cfg = find_config(ast, "system interface")
+    routed = _routed_source_names(cfg) if cfg is not None else set()
 
     def _kind(info: InterfaceInfo) -> str:
         return info.node.meta.get("_class", "logical")
@@ -268,7 +371,9 @@ def detect_reassignments(src_text: str, template_text: str) -> Tuple[List[Reassi
     # 1. Calcular que interfaces caben nativamente en cada slot del destino.
     #    Los slots LAN ocupan por IDENTIDAD (mismo nombre): renombrar en cadena
     #    (lan1->lan3) sin decision del usuario ocultaria la eleccion en la UI.
-    #    Los slots miembros de un switch nunca consumen: el usuario decide.
+    #    Los slots miembros de un switch solo son ocupados por una fuente PLAIN
+    #    (no ruteada); una fuente ruteada queda como excedente con sugerencia.
+    dmz_slots, mgmt_slots, ha_slots = layout._special_sets()
     used_slots: Set[str] = set()
     member_names = {
         m.lower()
@@ -289,43 +394,50 @@ def detect_reassignments(src_text: str, template_text: str) -> Tuple[List[Reassi
         if slot_l.startswith("wan") and pools_native["wan"]:
             pools_native["wan"].pop(0)
             used_slots.add(slot_l)
-        elif slot_l in ("ha1", "ha2") and pools_native["ha"]:
+        elif slot_l in ha_slots and pools_native["ha"]:
             pools_native["ha"].pop(0)
             used_slots.add(slot_l)
-        elif slot_l == "dmz" and pools_native["dmz"]:
+        elif slot_l in dmz_slots and pools_native["dmz"]:
             pools_native["dmz"].pop(0)
             used_slots.add(slot_l)
-        elif slot_l == "mgmt" and pools_native["mgmt"]:
+        elif slot_l in mgmt_slots and pools_native["mgmt"]:
             pools_native["mgmt"].pop(0)
             used_slots.add(slot_l)
-        elif (
-            slot_l in lan_slot_set
-            and slot_l not in member_names
-            and pools_native["lan_port"]
-        ):
-            idx = next(
-                (i for i, inf in enumerate(pools_native["lan_port"])
-                 if inf.name.lower() == slot_l),
-                None,
-            )
+        elif slot_l in lan_slot_set and pools_native["lan_port"]:
+            if slot_l in member_names:
+                # T3: solo una fuente PLAIN puede ocupar nativamente un slot
+                # miembro de switch; una fuente ruteada queda como excedente.
+                idx = next(
+                    (i for i, inf in enumerate(pools_native["lan_port"])
+                     if inf.name.lower() == slot_l and inf.name not in routed),
+                    None,
+                )
+            else:
+                idx = next(
+                    (i for i, inf in enumerate(pools_native["lan_port"])
+                     if inf.name.lower() == slot_l),
+                    None,
+                )
             if idx is not None:
                 pools_native["lan_port"].pop(idx)
                 used_slots.add(slot_l)
 
-    # 1b. Llenado: slots LAN libres (no miembros) con fisicos SIN slot propio.
-    #     Los fisicos cuyo nombre coincide con un slot del destino (o cuyo
-    #     slot propio es miembro de switch) no se consumen aqui: quedan como
-    #     excedentes visibles para decision del usuario.
+    # 1b. Llenado: slots LAN libres con fisicos SIN slot propio. Los slots
+    #     miembros de un switch solo aceptan fuentes PLAIN (no ruteadas); los
+    #     fisicos cuyo nombre coincide con un slot del destino no se consumen
+    #     aqui: quedan como excedentes visibles para decision del usuario.
     slot_names = {s.lower() for s in layout.slots}
     for slot in layout.slots:
         slot_l = slot.lower()
-        if slot_l in used_slots or slot_l in member_names or slot_l not in lan_slot_set:
+        is_member = slot_l in member_names
+        if slot_l in used_slots or slot_l not in lan_slot_set:
             continue
         if not pools_native["lan_port"]:
             break
         idx = next(
             (i for i, inf in enumerate(pools_native["lan_port"])
-             if inf.name.lower() not in slot_names),
+             if inf.name.lower() not in slot_names
+             and (not is_member or inf.name not in routed)),
             None,
         )
         if idx is not None:
@@ -424,6 +536,12 @@ def map_interfaces(
         return MapperResult(warnings=["No se encontró 'config system interface'"])
 
     classified = classify(ast)
+    # T2: role-first correction sobre la clasificacion por nombre
+    _restamp_metadata_overrides(classified)
+    # T3: fuentes ruteadas del origen (set ip / mode != static / padre de vlan)
+    routed_sources = _routed_source_names(cfg)
+    # T1: conjuntos de slots especiales con nombres reales
+    dmz_slots, mgmt_slots, ha_slots = layout._special_sets()
 
     def _kind(info: InterfaceInfo) -> str:
         return info.node.meta.get("_class", "logical")
@@ -507,13 +625,50 @@ def map_interfaces(
             continue
 
         if slot_l in member_slot_switch and slot_l not in user_target_slots:
-            # Miembro de switch (ej. lan1/lan2 en LAN2_CLIENTE): dejar vacio.
-            # El usuario decide si reasigna algo aca o al switch completo.
-            new_children.append(_make_empty_interface(slot))
-            result.log.append(
-                f"{slot}: miembro de switch '{member_slot_switch[slot_l]}', "
-                f"se deja vacio (reasignable manualmente)"
+            # Miembro de switch (ej. lan1/lan2 en LAN2_CLIENTE). T3: solo una
+            # fuente PLAIN (no ruteada) puede auto-llenarlo; una fuente ruteada
+            # cuyo slot propio es miembro (o cualquier excedente ruteado) se
+            # vuelve excedente con sugerencia: la decision es del usuario.
+            src = None
+            identity = next(
+                (i for i in pools["lan_port"]
+                 if id(i.node) not in used_nodes and i.name.lower() == slot_l
+                 and i.name not in routed_sources),
+                None,
             )
+            if identity is not None:
+                if identity.name not in user_source_names and identity.name.lower() not in user_target_slots:
+                    src = identity
+            else:
+                for info in pools["lan_port"]:
+                    if id(info.node) in used_nodes:
+                        continue
+                    if info.name.lower() in all_slot_names:
+                        continue
+                    if info.name in routed_sources:
+                        continue
+                    if info.name in user_source_names or info.name.lower() in user_target_slots:
+                        src = None
+                        break
+                    src = info
+                    break
+            if src is not None:
+                used_nodes.add(id(src.node))
+                new = _clone_edit_renaming(src.node, slot)
+                _strip_snmp_index(new)
+                result.mapping[src.name] = slot
+                result.log.append(
+                    f"{src.name} -> {slot} (miembro de switch "
+                    f"'{member_slot_switch[slot_l]}', fuente plain)"
+                )
+                new_children.append(new)
+                consumed_lan_slots.append(slot)
+            else:
+                new_children.append(_make_empty_interface(slot))
+                result.log.append(
+                    f"{slot}: miembro de switch '{member_slot_switch[slot_l]}', "
+                    f"se deja vacio (reasignable manualmente)"
+                )
             continue
 
         if slot_l.startswith("wan"):
@@ -527,7 +682,7 @@ def map_interfaces(
             else:
                 new_children.append(_make_empty_interface(slot))
                 result.log.append(f"{slot}: bloque vacío generado")
-        elif slot_l in ("ha1", "ha2"):
+        elif slot_l in ha_slots:
             src = take_from("ha")
             if src:
                 new = _clone_edit_renaming(src.node, slot)
@@ -538,28 +693,28 @@ def map_interfaces(
             else:
                 new_children.append(_make_empty_interface(slot))
                 result.log.append(f"{slot}: bloque vacío generado")
-        elif slot_l == "dmz":
+        elif slot_l in dmz_slots:
             src = take_from("dmz")
             if src:
-                new = _clone_edit_renaming(src.node, "dmz")
+                new = _clone_edit_renaming(src.node, slot)
                 _strip_snmp_index(new)
-                result.mapping[src.name] = "dmz"
-                result.log.append(f"{src.name} -> dmz")
+                result.mapping[src.name] = slot
+                result.log.append(f"{src.name} -> {slot}")
                 new_children.append(new)
             else:
-                new_children.append(_make_empty_interface("dmz"))
-                result.log.append("dmz: bloque vacío generado")
-        elif slot_l == "mgmt":
+                new_children.append(_make_empty_interface(slot))
+                result.log.append(f"{slot}: bloque vacío generado")
+        elif slot_l in mgmt_slots:
             src = take_from("mgmt")
             if src:
-                new = _clone_edit_renaming(src.node, "mgmt")
+                new = _clone_edit_renaming(src.node, slot)
                 _strip_snmp_index(new)
-                result.mapping[src.name] = "mgmt"
-                result.log.append(f"{src.name} -> mgmt")
+                result.mapping[src.name] = slot
+                result.log.append(f"{src.name} -> {slot}")
                 new_children.append(new)
             else:
-                new_children.append(_make_empty_interface("mgmt"))
-                result.log.append("mgmt: bloque vacío generado")
+                new_children.append(_make_empty_interface(slot))
+                result.log.append(f"{slot}: bloque vacío generado")
         else:
             # Slot fisico generico (portN, lanN, fisicos no canonicos como 'a'):
             # alineacion canonica: el origen con el mismo nombre del slot es su
