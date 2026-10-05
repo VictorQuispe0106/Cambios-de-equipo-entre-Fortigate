@@ -95,8 +95,13 @@ docs/diagrama-flujo.html
    `mgmt`, `ha1/ha2`, `modem`, y cualquier interfaz física no-canónica (ej. `a`).
    Detecta además los **switches de hardware** del destino (`config system
    switch-interface`): los puertos miembros (ej. `lan1`/`lan2` en `LAN2_CLIENTE`)
-   no se auto-llenan con interfaces ruteadas — quedan como excedentes y el switch
-   completo es un destino de reasignación elegible en la UI.
+   no se auto-llenan con interfaces **ruteadas** (con IP, DHCP o VLANs encima) —
+   quedan como excedentes y el switch completo es un destino de reasignación
+   elegible en la UI. Puertos planos (sin IP/rutas) sí pueden ocupar sus slots.
+   Los metadatos explícitos del backup (`set role`, `set vrf`,
+   `set dedicated-to`) priman sobre los prefijos de nombre, y los slots de
+   clases especiales (dmz/mgmt/ha/wan) usan los nombres reales de la plantilla
+   (los 600E con `dmz1`/`dmz2`, puertos de gestión con nombre no-canónico, etc.).
 3. El motor:
    - **Renombra** interfaces: `internal` ⇄ `port`, `LAN` → nombre canónico del destino,
      con reescritura en **una sola pasada** (sin corrupción de encadenados
