@@ -16,7 +16,21 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Set, Tuple
 
-from .parser import Node, AST, find_config
+from .parser import Node, AST, find_config, parse
+
+
+def find_config_from(node: Node, name: str) -> Optional[Node]:
+    """find_config anidado desde un nodo config dado (ej. buscar 'zone'
+    dentro de 'system sdwan')."""
+    for child in node.children:
+        if child.kind == "config" and child.meta.get("name") == name:
+            return child
+    for child in node.children:
+        if child.kind in ("config", "edit"):
+            for sub in child.children:
+                if sub.kind == "config" and sub.meta.get("name") == name:
+                    return sub
+    return None
 
 
 _NAME_CHARS = re.compile(r"[A-Za-z0-9_.\-]")
@@ -188,6 +202,35 @@ def find_orphaned_references(
                 if ref not in defined_interfaces:
                     results.append((line_no, ref, line))
     return results
+
+
+def get_zone_names(text: str) -> Set[str]:
+    """Extrae los nombres de zonas definidos en el texto:
+      - config system zone (edits directos)
+      - config system sdwan -> config zone (nested, SD-WAN zones)
+    """
+    ast = parse(text)
+    zones: Set[str] = set()
+    for cfg_name, nested in (("system zone", False), ("system sdwan", True)):
+        cfg = find_config(ast, cfg_name)
+        if cfg is None:
+            continue
+        if not nested:
+            for edit in cfg.children:
+                if edit.kind == "edit":
+                    name = edit.meta.get("name", "")
+                    if name:
+                        zones.add(name)
+        else:
+            zone_block = find_config_from(cfg, "zone")
+            if zone_block is None:
+                continue
+            for edit in zone_block.children:
+                if edit.kind == "edit":
+                    name = edit.meta.get("name", "")
+                    if name:
+                        zones.add(name)
+    return zones
 
 
 def get_interface_names_from_config(text: str) -> Set[str]:
