@@ -19,6 +19,7 @@ const state = {
   reassignments: [],
   wouldBeDiscarded: [],
   availableLanSlots: [],
+  switchInterfaces: [],
   validation: null,
   dryRunResult: null,
 };
@@ -115,8 +116,10 @@ function updateProcessButton() {
 }
 
 function updateHudStats() {
-  const wan = (state.layout?.slots || []).filter(s => s.toLowerCase().startsWith("wan")).length;
-  const port = (state.layout?.slots || []).filter(s => s.toLowerCase().startsWith("port")).length;
+  const slots = (state.layout?.slots || []).map(s => s.toLowerCase());
+  const wan = slots.filter(s => s.startsWith("wan")).length;
+  const special = new Set(["dmz", "mgmt", "ha1", "ha2", "modem"]);
+  const port = slots.filter(s => !s.startsWith("wan") && !special.has(s)).length;
   const rename = Object.keys(state.mapping).length;
   const reassign = state.reassignments.filter(r => r.target_slot).length;
   $("#statWan").textContent = wan;
@@ -255,6 +258,7 @@ async function loadTemplateText(text, label) {
       has_ha: j.has_ha,
     };
     state.availableLanSlots = j.lan_names || [];
+    state.switchInterfaces = j.switch_interfaces || [];
 
     statusEl.textContent = "Analisis completo · Mark compatible con tu traje";
     setTimeout(() => renderTemplatePreview(j), 700);
@@ -347,14 +351,19 @@ function renderReassignments(excedentes, discarded, allSlots) {
   countEl.textContent = `${excedentes.length} módulos`;
 
   const nativeOccupied = (state.layout && state.layout.slots) || [];
-  const options = allSlots || [];
+  // Destinos de reasignacion: slots fisicos + switches de hardware del
+  // destino (ej. LAN2_CLIENTE). El usuario decide donde reubicar.
+  const switchNames = (state.switchInterfaces || []).map(s => s.name)
+    .filter(n => !(allSlots || []).includes(n));
+  const options = (allSlots || []).concat(switchNames);
 
   const rows = excedentes.map((r, idx) => {
     const selectedSlot = r.target_slot || "";
     const opts = [`<option value="" disabled ${selectedSlot === "" ? "selected" : ""}>— elegir slot destino —</option>`]
       .concat(options.map((s) => {
         const selected = s === selectedSlot ? "selected" : "";
-        return `<option value="${escapeHtml(s)}" ${selected}>${escapeHtml(s)}</option>`;
+        const label = switchNames.includes(s) ? `${s} (switch)` : s;
+        return `<option value="${escapeHtml(s)}" ${selected}>${escapeHtml(label)}</option>`;
       }))
       .join("");
     const hasAuto = selectedSlot !== "";
@@ -652,6 +661,7 @@ $("#btnProcess").addEventListener("click", async () => {
 
       state.detectedModel = j.detected_model;
       state.layout = { model_hint: j.target_model_hint, slots: j.target_slots || [] };
+      state.switchInterfaces = j.target_switch_interfaces || [];
       state.mapping = j.mapping;
       state.log = j.log;
       state.warnings = j.warnings;
