@@ -24,6 +24,7 @@ from .model_detector import detect_model
 from .interface_classifier import classify
 from .interface_mapper import (
     map_interfaces,
+    apply_switch_member_fixups,
     DestinationLayout,
     DestinationProfile,
     MapperResult,
@@ -94,6 +95,9 @@ def run_pipeline(
 
     mapper_result = map_interfaces(ast, layout, reassignments=actual_reassignments)
     rename_counts = rename_references(ast, mapper_result.mapping)
+    # Insertar set member de switches convertidos DESPUES del renombrado:
+    # los miembros son puertos del destino y no deben reescribirse.
+    apply_switch_member_fixups(mapper_result.switch_fixups)
 
     claro_injected = False
     if inject_admin:
