@@ -178,6 +178,10 @@ class Handler(BaseHTTPRequestHandler):
             "modem_count": len(layout.modem_names),
             "summary": summarize(layout),
             "slots": list(layout.slots),
+            "switch_interfaces": [
+                {"name": name, "members": list(members)}
+                for name, members in layout.switch_members.items()
+            ],
             "excedentes": [],
             "would_be_discarded_if_no_manual": [],
         }
@@ -290,6 +294,10 @@ class Handler(BaseHTTPRequestHandler):
             "target_model_hint": result.layout.model_hint if result.layout else None,
             "target_summary": summarize(result.layout) if result.layout else "",
             "target_slots": result.layout.slots if result.layout else [],
+            "target_switch_interfaces": [
+                {"name": name, "members": list(members)}
+                for name, members in (result.layout.switch_members.items() if result.layout else [])
+            ],
             "mapping": result.mapping,
             "log": result.log,
             "warnings": result.warnings,

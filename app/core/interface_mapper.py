@@ -58,8 +58,11 @@ class DestinationProfile:
 @dataclass
 class DestinationLayout:
     """
-    Layout explicito del destino: lista de nombres de slot en el orden canonico.
-    Ejemplo: ['dmz', 'mgmt', 'wan1', 'wan2', 'ha1', 'ha2', 'port1', ..., 'port20']
+    Layout explicito del destino: lista de slots con los NOMBRES REALES de las
+    interfaces fisicas del backup plantilla (ej. ['dmz', 'wan1', 'wan2',
+    'port1', ...] o ['wan', 'lan1', 'lan2', 'lan3', 'a'] en la familia 30G/40F).
+    El mapeador renombra interfaces del origen a estos nombres: usar nombres
+    normalizados (wan1/portN) generaria interfaces inexistentes en el destino.
     """
     model_hint: Optional[str] = None
     slots: List[str] = field(default_factory=list)
@@ -67,6 +70,26 @@ class DestinationLayout:
     modem_names: List[str] = field(default_factory=list)
     # T8: fisicos no canonicos que NO son modem* (ej. fortilink, "a")
     _misc_physicals: List[str] = field(default_factory=list)
+    # switch de hardware del destino: nombre -> miembros fisicos
+    # (ej. {"LAN2_CLIENTE": ["lan1", "lan2"]}). Los slots miembros no deben
+    # auto-llenarse con interfaces ruteadas; el switch es destino de reasignacion.
+    switch_members: Dict[str, List[str]] = field(default_factory=dict)
+
+    @property
+    def switch_names(self) -> List[str]:
+        return list(self.switch_members.keys())
+
+    _SPECIAL_NON_LAN = ("dmz", "mgmt", "ha1", "ha2", "modem")
+
+    @property
+    def lan_names(self) -> List[str]:
+        """Slots fisicos asignables como LAN (nombres reales, incluye fisicos
+        no canonicos como 'a'; excluye wan*/dmz/mgmt/ha/modem)."""
+        return [
+            s for s in self.slots
+            if not s.lower().startswith("wan")
+            and s.lower() not in self._SPECIAL_NON_LAN
+        ]
 
     @property
     def wan_count(self) -> int:
@@ -90,11 +113,7 @@ class DestinationLayout:
 
     @property
     def lan_count(self) -> int:
-        return sum(1 for s in self.slots if s.lower().startswith("port"))
-
-    @property
-    def lan_names(self) -> List[str]:
-        return [s for s in self.slots if s.lower().startswith("port")]
+        return len(self.lan_names)
 
     def has_slot(self, name: str) -> bool:
         n = name.lower()
@@ -129,6 +148,10 @@ class MapperResult:
     log: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     reassignments: List[Reassignment] = field(default_factory=list)
+    # Conversiones a switch pendientes de insertar set member DESPUES del
+    # renombrado de referencias (el renamer no debe tocar los miembros:
+    # son nombres de puertos del destino, no del origen).
+    switch_fixups: List[Tuple[Node, List[str]]] = field(default_factory=list)
 
 
 # ============================================================
@@ -148,6 +171,43 @@ def _make_empty_interface(name: str, indent_text: str = "    ") -> Node:
     node.add_child(Node(kind="set", text=f'{indent_text}    set vdom "root"'))
     node.add_child(Node(kind="set", text=f'{indent_text}    set type physical'))
     return node
+
+
+def _set_type_switch(node: Node) -> None:
+    """Marca el bloque clonado como switch de hardware (type switch)."""
+    type_child = next(
+        (c for c in node.children
+         if c.kind == "set" and c.text.strip().startswith("set type ")),
+        None,
+    )
+    if type_child is not None:
+        indent = type_child.text[: len(type_child.text) - len(type_child.text.lstrip())]
+        type_child.text = f"{indent}set type switch"
+    else:
+        indent = "        "
+        node.add_child(Node(kind="set", text=f"{indent}set type switch"))
+
+
+def apply_switch_member_fixups(fixups: List[Tuple[Node, List[str]]]) -> None:
+    """Inserta el set member de cada switch convertido. Debe ejecutarse
+    DESPUES de rename_references: los miembros son puertos del destino y el
+    renamer no debe reescribirlos con el mapping del origen."""
+    for node, members in fixups:
+        if any(
+            c.kind == "set" and c.text.strip().startswith("set member ")
+            for c in node.children
+        ):
+            continue
+        indent = "        "
+        vdom_idx = next(
+            (i for i, c in enumerate(node.children)
+             if c.kind == "set" and c.text.strip().startswith("set vdom")),
+            0,
+        )
+        member_line = f"{indent}set member " + " ".join(f'"{m}"' for m in members)
+        member_node = Node(kind="set", text=member_line)
+        node.children.insert(vdom_idx + 1, member_node)
+        member_node.parent = node
 
 
 def _clone_edit_renaming(node: Node, new_name: str) -> Node:
@@ -205,8 +265,17 @@ def detect_reassignments(src_text: str, template_text: str) -> Tuple[List[Reassi
     def _kind(info: InterfaceInfo) -> str:
         return info.node.meta.get("_class", "logical")
 
-    # 1. Calcular que interfaces caben nativamente
+    # 1. Calcular que interfaces caben nativamente en cada slot del destino.
+    #    Los slots LAN ocupan por IDENTIDAD (mismo nombre): renombrar en cadena
+    #    (lan1->lan3) sin decision del usuario ocultaria la eleccion en la UI.
+    #    Los slots miembros de un switch nunca consumen: el usuario decide.
     used_slots: Set[str] = set()
+    member_names = {
+        m.lower()
+        for members in layout.switch_members.values()
+        for m in members
+    }
+    lan_slot_set = {s.lower() for s in layout.lan_names}
     pools_native: Dict[str, List[InterfaceInfo]] = {
         "wan": [], "mgmt": [], "dmz": [], "ha": [], "lan_port": [],
     }
@@ -229,8 +298,38 @@ def detect_reassignments(src_text: str, template_text: str) -> Tuple[List[Reassi
         elif slot_l == "mgmt" and pools_native["mgmt"]:
             pools_native["mgmt"].pop(0)
             used_slots.add(slot_l)
-        elif slot_l.startswith("port") and pools_native["lan_port"]:
-            pools_native["lan_port"].pop(0)
+        elif (
+            slot_l in lan_slot_set
+            and slot_l not in member_names
+            and pools_native["lan_port"]
+        ):
+            idx = next(
+                (i for i, inf in enumerate(pools_native["lan_port"])
+                 if inf.name.lower() == slot_l),
+                None,
+            )
+            if idx is not None:
+                pools_native["lan_port"].pop(idx)
+                used_slots.add(slot_l)
+
+    # 1b. Llenado: slots LAN libres (no miembros) con fisicos SIN slot propio.
+    #     Los fisicos cuyo nombre coincide con un slot del destino (o cuyo
+    #     slot propio es miembro de switch) no se consumen aqui: quedan como
+    #     excedentes visibles para decision del usuario.
+    slot_names = {s.lower() for s in layout.slots}
+    for slot in layout.slots:
+        slot_l = slot.lower()
+        if slot_l in used_slots or slot_l in member_names or slot_l not in lan_slot_set:
+            continue
+        if not pools_native["lan_port"]:
+            break
+        idx = next(
+            (i for i, inf in enumerate(pools_native["lan_port"])
+             if inf.name.lower() not in slot_names),
+            None,
+        )
+        if idx is not None:
+            pools_native["lan_port"].pop(idx)
             used_slots.add(slot_l)
 
     # 2. Identificar TODOS los excedentes
@@ -247,8 +346,19 @@ def detect_reassignments(src_text: str, template_text: str) -> Tuple[List[Reassi
     # Ordenar por prioridad
     excedentes.sort(key=lambda pair: _priority_order(pair[1]))
 
-    # 3. Asignar slots libres (los portN que quedaron sin consumir)
-    available = [s for s in layout.lan_names if s not in used_slots]
+    # 3. Asignar slots libres (los que quedaron sin consumir).
+    # Los miembros de un switch de hardware del destino NO son candidatos de
+    # auto-sugerencia: montar una interfaz ruteada sobre un puerto miembro
+    # produce config invalida. La decision es del usuario via reasignacion.
+    member_names = {
+        m.lower()
+        for members in layout.switch_members.values()
+        for m in members
+    }
+    available = [
+        s for s in layout.lan_names
+        if s not in used_slots and s.lower() not in member_names
+    ]
     reassignments: List[Reassignment] = []
     discarded: List[str] = []
 
@@ -330,8 +440,19 @@ def map_interfaces(
     result = MapperResult()
     new_children: List[Node] = []
     used_nodes: set = set()
-    consumed_lan_slots: List[str] = []  # slots portN usados en el paso 2
+    consumed_lan_slots: List[str] = []  # slots LAN usados en el paso 2
     used_slots: Set[str] = set()  # nombres de slot ya generados
+    # Nombres de todos los slots del destino (lowercase): un fisico cuyo nombre
+    # coincide con un slot no se consume en otro slot (su lugar lo resuelve su
+    # slot propio o una reasignacion manual).
+    all_slot_names = {s.lower() for s in layout.slots}
+    # Miembros de switches de hardware del destino: no se auto-llenan con
+    # interfaces ruteadas; quedan vacios salvo decision del usuario.
+    member_slot_switch: Dict[str, str] = {
+        m.lower(): sw
+        for sw, members in layout.switch_members.items()
+        for m in members
+    }
 
     # T3: conservar comentarios y lineas en blanco del bloque original.
     # Los previos al primer edit se emiten al inicio del bloque; los
@@ -385,6 +506,16 @@ def map_interfaces(
                 consumed_lan_slots.append(slot)
             continue
 
+        if slot_l in member_slot_switch and slot_l not in user_target_slots:
+            # Miembro de switch (ej. lan1/lan2 en LAN2_CLIENTE): dejar vacio.
+            # El usuario decide si reasigna algo aca o al switch completo.
+            new_children.append(_make_empty_interface(slot))
+            result.log.append(
+                f"{slot}: miembro de switch '{member_slot_switch[slot_l]}', "
+                f"se deja vacio (reasignable manualmente)"
+            )
+            continue
+
         if slot_l.startswith("wan"):
             src = take_from("wan")
             if src:
@@ -429,8 +560,9 @@ def map_interfaces(
             else:
                 new_children.append(_make_empty_interface("mgmt"))
                 result.log.append("mgmt: bloque vacío generado")
-        elif slot_l.startswith("port"):
-            # Alineacion canonica: el origen con el mismo nombre del slot es su
+        else:
+            # Slot fisico generico (portN, lanN, fisicos no canonicos como 'a'):
+            # alineacion canonica: el origen con el mismo nombre del slot es su
             # ocupante natural. Si es fuente de reasignacion manual (o quedo
             # desplazado por un slot reservado), el slot queda vacio.
             src = None
@@ -445,6 +577,8 @@ def map_interfaces(
             else:
                 for info in pools["lan_port"]:
                     if id(info.node) in used_nodes:
+                        continue
+                    if info.name.lower() in all_slot_names:
                         continue
                     if info.name in user_source_names or info.name.lower() in user_target_slots:
                         src = None
@@ -472,11 +606,14 @@ def map_interfaces(
         if any(c.meta.get("name") == s and len(c.children) == 2  # solo los vacios (vdom + type)
                for c in new_children)
     ]
-    # Fallback mas robusto: un slot esta disponible si NO tiene un mapping que le apunte
+    # Fallback mas robusto: un slot esta disponible si NO tiene un mapping que
+    # le apunte. Los miembros de switch quedan fuera del auto-fill: su destino
+    # lo decide el usuario (slot miembro, switch completo o vacio).
+    member_names = set(member_slot_switch.keys())
     mapped_targets = set(result.mapping.values())
     available_lan_slots = [
         s for s in layout.lan_names
-        if s not in mapped_targets
+        if s not in mapped_targets and s.lower() not in member_names
     ]
 
     # Construir lista de excedentes
@@ -549,12 +686,22 @@ def map_interfaces(
                     _warn_displaced_native(result, pools, native_origin, layout, target_slot)
                 # Reemplazar el bloque (sea vacio o nativo)
                 new = _clone_edit_renaming(info.node, target_slot)
+                if target_slot in layout.switch_members:
+                    _set_type_switch(new)
+                    result.switch_fixups.append(
+                        (new, layout.switch_members[target_slot])
+                    )
                 _strip_snmp_index(new)
                 new_children[i] = new
                 replaced = True
                 break
         if not replaced:
             new = _clone_edit_renaming(info.node, target_slot)
+            if target_slot in layout.switch_members:
+                _set_type_switch(new)
+                result.switch_fixups.append(
+                    (new, layout.switch_members[target_slot])
+                )
             _strip_snmp_index(new)
             new_children.append(new)
         result.mapping[src_name] = target_slot

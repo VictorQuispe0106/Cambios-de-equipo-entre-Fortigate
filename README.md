@@ -90,8 +90,13 @@ docs/diagrama-flujo.html
 1. Cargás el **backup origen** (el `.conf` del modelo actual) y el **backup destino**
    (una template `.conf` del modelo al que querés pasar).
 2. La app detecta el modelo de origen (`#config-version=`) y extrae el **layout de
-   interfaces del destino** (puertos `portN`, `wan1..N`, `dmz`, `mgmt`, `ha1/ha2`,
-   `modem`, y cualquier interfaz física no-canónica) desde la plantilla.
+   interfaces del destino** con los **nombres reales** de la plantilla: `portN`,
+   `internalN`, `lanN` (familia 30G / FortiWiFi 40F), `wan1..N` o `wan`, `dmz`,
+   `mgmt`, `ha1/ha2`, `modem`, y cualquier interfaz física no-canónica (ej. `a`).
+   Detecta además los **switches de hardware** del destino (`config system
+   switch-interface`): los puertos miembros (ej. `lan1`/`lan2` en `LAN2_CLIENTE`)
+   no se auto-llenan con interfaces ruteadas — quedan como excedentes y el switch
+   completo es un destino de reasignación elegible en la UI.
 3. El motor:
    - **Renombra** interfaces: `internal` ⇄ `port`, `LAN` → nombre canónico del destino,
      con reescritura en **una sola pasada** (sin corrupción de encadenados
