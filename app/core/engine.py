@@ -36,6 +36,7 @@ from .renamer import (
     find_unrenamed_references,
     find_orphaned_references,
     get_interface_names_from_config,
+    get_zone_names,
 )
 from .admin_injector import inject_claro
 from .template_parser import extract_layout as _extract_layout_raw, summarize as _summarize
@@ -57,6 +58,24 @@ class EngineResult:
     validation: Optional[ValidationResult] = None
     unrenamed_refs: List[Tuple[int, str, str]] = field(default_factory=list)
     orphaned_refs: List[Tuple[int, str, str]] = field(default_factory=list)
+    invented_interface_names: List[str] = field(default_factory=list)
+
+
+def check_invented_names(
+    source_text: str, template_text: str, output_text: str
+) -> List[str]:
+    """T6: invariante any-model de nombres inventados.
+
+    Devuelve (ordenada) los nombres de interfaz definidos en el output que
+    no existen ni en el backup origen ni en la plantilla destino. En una
+    migracion correcta el output solo puede contener nombres del origen
+    (conservados/logicas) o de la plantilla (slots destino).
+    """
+    source_names = get_interface_names_from_config(source_text)
+    template_names = get_interface_names_from_config(template_text)
+    output_names = get_interface_names_from_config(output_text)
+    invented = output_names - source_names - template_names
+    return sorted(invented)
 
 
 def run_pipeline(
@@ -109,6 +128,7 @@ def run_pipeline(
     validation_result = None
     unrenamed = []
     orphaned = []
+    invented = []
     if validate:
         validation_result = validate_config(output_text)
 
@@ -120,13 +140,28 @@ def run_pipeline(
                     f"Linea {line_no}: referencia a '{iface}' no renombrada"
                 )
 
-        # Buscar interfaces huérfanas
+        # Interfaces huerfanas: filtrar nombres de zona (T8) antes de evaluar
+        zone_names = get_zone_names(input_text) | get_zone_names(template_text)
         defined = get_interface_names_from_config(output_text)
-        orphaned = find_orphaned_references(output_text, defined)
+        orphaned = [
+            (line_no, iface, line_text)
+            for (line_no, iface, line_text) in find_orphaned_references(
+                output_text, defined)
+            if iface not in zone_names
+        ]
         if orphaned:
             for line_no, iface, line_text in orphaned:
                 validation_result.warnings.append(
                     f"Linea {line_no}: interface '{iface}' referenciada pero no definida"
+                )
+
+        # T6: invariante any-model de nombres inventados
+        invented = check_invented_names(input_text, template_text, output_text)
+        if invented:
+            for name in invented:
+                validation_result.errors.append(
+                    f"Interface '{name}' definida en el output no existe ni en el "
+                    "origen ni en la plantilla destino"
                 )
 
         # Agregar warnings del mapper
@@ -151,6 +186,7 @@ def run_pipeline(
         validation=validation_result,
         unrenamed_refs=unrenamed,
         orphaned_refs=orphaned,
+        invented_interface_names=invented,
     )
 
 
