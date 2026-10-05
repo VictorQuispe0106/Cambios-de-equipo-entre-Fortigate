@@ -96,9 +96,105 @@ class TestExtractLayout(unittest.TestCase):
         self.assertFalse(layout.has_dmz)
         self.assertFalse(layout.has_ha)
         self.assertEqual(layout.lan_count, 6)
-        # internal1 -> port1, internal6 -> port6
-        self.assertEqual(layout.lan_names, ["port1", "port2", "port3", "port4", "port5", "port6"])
+        # Real names are kept: the mapper must emit names that exist on the
+        # destination device, so internal1 stays internal1 (no portN rewrite).
+        self.assertEqual(layout.lan_names,
+                         ["internal1", "internal2", "internal3",
+                          "internal4", "internal5", "internal6"])
         self.assertEqual(layout.model_hint, "80F")
+
+    def test_lanN_naming_is_recognized(self):
+        """Models named lan1..lanN (FGT 30G / FortiWiFi 40F family) must be
+        detected as LAN slots instead of falling to misc physicals."""
+        text = make_template(wans=1, lan=[1, 2, 3, 4], lan_prefix="lan",
+                             model_hint="30G")
+        layout = extract_layout(text)
+        self.assertEqual(layout.lan_count, 4)
+        self.assertEqual(layout.lan_names, ["lan1", "lan2", "lan3", "lan4"])
+        self.assertEqual(layout._misc_physicals, [])
+
+    def test_wan_slot_keeps_real_name(self):
+        """A single WAN port named 'wan' must produce slot 'wan', not 'wan1'."""
+        text = [
+            "#config-version=FWF40F-7.4.11-FW-build2878-260126:opmode=0:vdom=0:user=admin",
+            "config system interface",
+            '    edit "wan"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "lan1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            "end",
+        ]
+        layout = extract_layout("\n".join(text) + "\n")
+        self.assertEqual(layout.slots, ["wan", "lan1"])
+        self.assertEqual(layout.wan_count, 1)
+
+    def test_misc_physical_becomes_slot(self):
+        """Physical non-canonical ports (ej. 'a') are real ports of the
+        destination: they must be offered as mapable slots."""
+        text = [
+            "config system interface",
+            '    edit "wan"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "a"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            "end",
+        ]
+        layout = extract_layout("\n".join(text) + "\n")
+        self.assertIn("a", layout.slots)
+        self.assertEqual(layout.slots, ["wan", "a"])
+
+    def test_switch_members_detected(self):
+        """Hardware switch interfaces of the template must be detected so the
+        mapper can avoid auto-filling member ports and offer the switch as a
+        reassignment target."""
+        text = [
+            "config system switch-interface",
+            '    edit "LAN2_CLIENTE"',
+            '        set vdom "root"',
+            '        set member "lan1" "lan2"',
+            "    next",
+            "end",
+            "config system interface",
+            '    edit "wan"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "lan1"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "lan2"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "lan3"',
+            '        set vdom "root"',
+            '        set type physical',
+            '    next',
+            '    edit "LAN2_CLIENTE"',
+            '        set vdom "root"',
+            '        set type switch',
+            '        set member "lan1" "lan2"',
+            '    next',
+            "end",
+        ]
+        layout = extract_layout("\n".join(text) + "\n")
+        self.assertEqual(layout.switch_members,
+                         {"LAN2_CLIENTE": ["lan1", "lan2"]})
+        self.assertEqual(layout.switch_names, ["LAN2_CLIENTE"])
+        # Member ports remain slots (they physically exist) and the switch
+        # itself is a logical interface, not a slot.
+        self.assertIn("lan1", layout.slots)
+        self.assertIn("lan2", layout.slots)
+        self.assertNotIn("LAN2_CLIENTE", layout.slots)
 
     def test_modem_preserved(self):
         text = make_template(wans=2, mgmt=False, dmz=False, ha=False, lan=[1, 2, 3],

@@ -85,9 +85,11 @@ def _classify_destination_edit(name: str, iftype: str, alias: Optional[str],
     if iftype in {"tunnel", "aggregate", "vdom-link", "vlan", "switch"}:
         return "logical"
 
-    # Port / internal (LAN fisica)
+    # Port / internal / lan (LAN fisica). La familia FGT 30G / FortiWiFi 40F
+    # nombra sus puertos LAN como lan1..lanN: deben reconocerse como slots.
     if iftype == "physical":
-        if n.startswith("port") or n.startswith("internal") or n.startswith("x"):
+        if (n.startswith("port") or n.startswith("internal")
+                or n.startswith("x") or n.startswith("lan")):
             return "lan"
         # Nombre fisico no canonico (ej. "a", "b", "fortilink")
         # Se conserva como logica para no perderlo en una migracion
@@ -133,8 +135,30 @@ def extract_layout(template_text: str) -> DestinationLayout:
         modem_names=[],
     )
 
+    wan_order: List[str] = []
     lan_order: List[str] = []
     seen_lan: set = set()
+
+    # Switches de hardware del destino (config system switch-interface):
+    # nombre del switch -> miembros fisicos. En equipos como el FortiWiFi 40F
+    # los puertos lan1/lan2 son miembros de un switch; el mapeador no debe
+    # auto-llenarlos con interfaces ruteadas sin decision del usuario.
+    switch_cfg = find_config(ast, "system switch-interface")
+    switch_members: dict = {}
+    if switch_cfg is not None:
+        for edit in switch_cfg.children:
+            if edit.kind != "edit":
+                continue
+            sw_name = edit.meta.get("name", "")
+            if not sw_name:
+                continue
+            members = [
+                m.strip().strip('"')
+                for m in (get_set_value(edit, "member") or "").split()
+                if m.strip()
+            ]
+            if members:
+                switch_members[sw_name] = members
 
     for edit in cfg.children:
         if edit.kind != "edit":
@@ -155,6 +179,8 @@ def extract_layout(template_text: str) -> DestinationLayout:
 
         if kind == "wan":
             info.wan_count += 1
+            if name not in wan_order:
+                wan_order.append(name)
         elif kind == "ha":
             info.has_ha = True
         elif kind == "dmz":
@@ -181,8 +207,9 @@ def extract_layout(template_text: str) -> DestinationLayout:
             elif name not in info._misc_physicals:
                 info._misc_physicals.append(name)
 
-    # Normalizar LAN a portN
-    info.lan_names = [_normalize_lan_name(name, idx) for idx, name in enumerate(lan_order, start=1)]
+    # Los slots conservan el nombre real de la interfaz en el backup destino:
+    # renombrar a wanN/portN normalizados crearia interfaces inexistentes.
+    info.lan_names = list(lan_order)
 
     # Construir slots en orden canonico
     slots: List[str] = []
@@ -190,12 +217,12 @@ def extract_layout(template_text: str) -> DestinationLayout:
         slots.append("dmz")
     if info.has_mgmt:
         slots.append("mgmt")
-    for i in range(1, info.wan_count + 1):
-        slots.append(f"wan{i}")
+    slots.extend(wan_order)
     if info.has_ha:
         slots.append("ha1")
         slots.append("ha2")
     slots.extend(info.lan_names)
+    slots.extend(info._misc_physicals)
 
     # Construir DestinationLayout final con campos extra
     layout = DestinationLayout(
@@ -204,28 +231,9 @@ def extract_layout(template_text: str) -> DestinationLayout:
         logical_names=info.logical_names,
         modem_names=info.modem_names,
         _misc_physicals=info._misc_physicals,
+        switch_members=switch_members,
     )
     return layout
-
-
-def _normalize_lan_name(original: str, idx: int) -> str:
-    """
-    Normaliza el nombre de una interfaz LAN a 'portN' en orden.
-    internal1 -> port1, internal2 -> port2, port5 -> port5.
-    Si el nombre ya tiene formato 'portN', se respeta.
-    """
-    n = original.lower()
-    m = re.match(r"port(\d+)$", n)
-    if m:
-        return f"port{m.group(1)}"
-    m = re.match(r"internal(\d+)$", n)
-    if m:
-        return f"port{m.group(1)}"
-    m = re.match(r"x(\d+)$", n)
-    if m:
-        return f"port{m.group(1)}"
-    # Nombre no canonico: usar index secuencial
-    return f"port{idx}"
 
 
 def summarize(layout: DestinationLayout) -> str:
